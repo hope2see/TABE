@@ -127,7 +127,7 @@ def print_configs(configs):
         logger.info(f'  {"Root Path:":<20}{configs.root_path:<20}{"Data Path:":<20}{configs.data_path:<20}')
     logger.info('')
 
-    logger.info(f"\033[1m" + "HPO Policy = {configs.hpo_policy}" + "\033[0m")
+    logger.info(f"\033[1m" + f"HPO Policy = {configs.hpo_policy}" + "\033[0m")
     if configs.hpo_policy == 2:
         logger.info(f'  {"interval:":<20}{configs.hpo_interval:<20}{"max_hpo_eval:":<20}{configs.max_hpo_eval:<20}')
     logger.info('')
