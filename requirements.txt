@@ -1,0 +1,22 @@
+# For Time-Series-Library
+einops
+local-attention
+matplotlib
+numpy
+pandas
+patool
+reformer-pytorch
+scikit-learn
+scipy
+sktime
+sympy
+torch
+tqdm
+PyWavelets
+
+# Added for TABE
+yfinance
+hyperopt
+statsmodels
+seaborn
+pyro-ppl
