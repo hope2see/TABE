@@ -184,13 +184,14 @@ class CombinerModel(AbstractModel):
         spent_time = (time.time() - time_now) 
         logger.info(f"CombinerModel.train() : {spent_time:.4f} sec elapsed for getting base models' predictions")
 
-        assert self.HPO_PERIOD <= len(train_loader), \
+        if self.hpo_policy == 0: 
+            self.basemodel_losses = basemodel_losses[:, -self.MAX_LOOKBACK_WIN:]
+            self.truths = train_dataset.data_y[-self.MAX_LOOKBACK_WIN:, -1]
+        else:
+            assert self.HPO_PERIOD <= len(train_loader), \
                     f'length of train data ({len(train_loader)}) should be longer than HPO_PERIOD({self.HPO_PERIOD})'     
-        self.basemodel_losses = basemodel_losses[:, -self.HPO_PERIOD:]
-        self.truths = train_dataset.data_y[-self.HPO_PERIOD:, -1]
-
-        # Hyperparameter Optimization -------------------------------------
-        if self.hpo_policy != 0: 
+            self.basemodel_losses = basemodel_losses[:, -self.HPO_PERIOD:]
+            self.truths = train_dataset.data_y[-self.HPO_PERIOD:, -1]
             self.hp_dict, trials = self._optimize_HP(max_evals=self.configs.max_hpo_eval)
             report.plot_hpo_result(trials, "HyperParameter Optimization for Combiner",
                                 self._get_result_path()+"/hpo_result.pdf")
