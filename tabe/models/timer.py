@@ -13,10 +13,10 @@ class Timer(AbstractModel):
     def __init__(self, configs, device, name='Timer'):
         super().__init__(configs, name)
         self.device = device
-        model_path = 'thuml/timer-base-84m'
+        checkpoint_path = 'thuml/timer-base-84m'
             
         model = AutoModelForCausalLM.from_pretrained(
-            model_path,
+            checkpoint_path,
             device_map=device,
             torch_dtype='auto',
             trust_remote_code=True,

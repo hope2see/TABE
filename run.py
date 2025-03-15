@@ -23,6 +23,7 @@ from tabe.models.abstractmodel import AbstractModel
 from tabe.models.basemodels import EtsModel, SarimaModel, AutoSarimaModel, TSLibModel, DrifterModel, NoiseModel
 from tabe.models.timemoe import TimeMoE
 from tabe.models.timer import Timer
+from tabe.models.timesfm import TimesFM
 from tabe.models.combiner import CombinerModel
 from tabe.models.adjuster import AdjusterModel, TimeMoeAdjuster, GpmAdjuster
 from tabe.models.tabe import TabeModel
@@ -329,6 +330,7 @@ def _create_base_model(configs, device, model_name) -> AbstractModel:
         'CMamba': CMamba  
     }
     other_models = {
+        'TimesFM': TimesFM,
         'Timer': Timer,
         'TimeMoE': TimeMoE,
         'ETS': EtsModel,
@@ -444,7 +446,13 @@ def run(args=None):
         if model_args is not None:
             bm_configs = copy.deepcopy(configs)
             bm_configs.__dict__.update(model_args.__dict__) # add/update with model-specific arguments
-        basemodels.append(_create_base_model(bm_configs, device, model_name))
+        # FIX 
+        if model_name == 'TimeMoE':
+            basemodels.append(TimeMoE(bm_configs, device, name='TimeMoE-Base', ds_size='base'))
+            basemodels.append(TimeMoE(bm_configs, device, name='TimeMoE-Large', ds_size='large'))
+            # basemodels.append(TimeMoE(bm_configs, device, name='TimeMoE-Ultra', ds_size='ultra'))
+        else:
+            basemodels.append(_create_base_model(bm_configs, device, model_name))
     
     combiner_configs = configs
     if configs.combiner is not None:

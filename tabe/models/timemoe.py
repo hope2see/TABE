@@ -12,11 +12,13 @@ _mem_util = MemUtil(rss_mem=False, python_mem=False)
 class TimeMoE(AbstractModel):
     MAX_CONTEXT_LEN = 4096 # limitation of TimeMoE architecture
 
-    def __init__(self, configs, device, name='TimeMoE'):
+    def __init__(self, configs, device, name='TimeMoE', ds_size='ultra'):
         super().__init__(configs, name)
         self.device = device
-
-        model_path = 'Maple728/TimeMoE-50M'        
+        model_path = \
+            'Maple728/TimeMoE-50M' if ds_size == 'base' else  \
+            'Maple728/TimeMoE-200M' if ds_size == 'large' else \
+            'Maple728/Time-300B' # not available! 
             
         try:
             from time_moe.models.modeling_time_moe import TimeMoeForPrediction
