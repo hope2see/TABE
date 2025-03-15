@@ -20,3 +20,4 @@ hyperopt
 statsmodels
 seaborn
 pyro-ppl
+pmdarima
