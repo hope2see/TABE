@@ -8,8 +8,9 @@ desc='all_models_BTC'
 python -u run.py \
     --model TABE \
     --model_id $test_name'_('$desc')' \
-    --data TABE_FILE --data_path 'BTC-USD_LogRet_2021-01-01_2023-01-01_1d.csv' \
-    --data_train_splits 0.3 0.5 0.2 \
+    --data TABE_FILE --data_path 'BTC-USD_LogRet_2022-01-01_2025-01-01_1d.csv' \
+    --data_test_split 0.3 \
+    --data_train_splits 0.4 0.5 0.1 \
     --seq_len 128 --label_len 128 \
     --train_epochs 10  \
     --basemodel 'ETS' \
@@ -31,7 +32,8 @@ python -u run.py \
     --model TABE \
     --model_id $test_name'_('$desc')' \
     --data TABE_FILE --data_path 'SPY_LogRet_2023-01-01_2025-01-01_1d.csv' \
-    --data_train_splits 0.3 0.5 0.2 \
+    --data_test_split 0.2 \
+    --data_train_splits 0.4 0.5 0.1 \
     --seq_len 128 --label_len 128 \
     --train_epochs 10  \
     --basemodel 'ETS' \
