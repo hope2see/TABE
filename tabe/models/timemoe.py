@@ -12,7 +12,7 @@ _mem_util = MemUtil(rss_mem=False, python_mem=False)
 class TimeMoE(AbstractModel):
     MAX_CONTEXT_LEN = 4096 # limitation of TimeMoE architecture
 
-    def __init__(self, configs, device, name='TimeMoE', ds_size='ultra'):
+    def __init__(self, configs, device, name='TimeMoE', ds_size='large'):
         super().__init__(configs, name)
         self.device = device
         model_path = \

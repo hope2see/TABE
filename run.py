@@ -447,12 +447,12 @@ def run(args=None):
             bm_configs = copy.deepcopy(configs)
             bm_configs.__dict__.update(model_args.__dict__) # add/update with model-specific arguments
         # FIX 
-        if model_name == 'TimeMoE':
-            basemodels.append(TimeMoE(bm_configs, device, name='TimeMoE-Base', ds_size='base'))
-            basemodels.append(TimeMoE(bm_configs, device, name='TimeMoE-Large', ds_size='large'))
-            # basemodels.append(TimeMoE(bm_configs, device, name='TimeMoE-Ultra', ds_size='ultra'))
-        else:
-            basemodels.append(_create_base_model(bm_configs, device, model_name))
+        # if model_name == 'TimeMoE':
+        #     basemodels.append(TimeMoE(bm_configs, device, name='TimeMoE-Base', ds_size='base'))
+        #     basemodels.append(TimeMoE(bm_configs, device, name='TimeMoE-Large', ds_size='large'))
+        #     # basemodels.append(TimeMoE(bm_configs, device, name='TimeMoE-Ultra', ds_size='ultra'))
+        # else:
+        basemodels.append(_create_base_model(bm_configs, device, model_name))
     
     combiner_configs = configs
     if configs.combiner is not None:
