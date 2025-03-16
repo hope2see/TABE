@@ -20,7 +20,8 @@ import importlib
 import builtins
 
 # Minimum allowed version
-IS_PYTHON_312 = sys.version_info[0] == 3 and sys.version_info[1] >= 12
+# IS_PYTHON_312 = sys.version_info[0] == 3 and sys.version_info[1] >= 12
+IS_PYTHON_312 = sys.version_info[0] == 3 and sys.version_info[1] >= 11
 MIN_PYTHON = (3, 9)
 
 # Hacky (!!), adopted from sklearn. This sets a global variable
