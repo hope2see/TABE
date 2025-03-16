@@ -22,7 +22,10 @@ hyperopt
 statsmodels
 seaborn
 pyro-ppl
-# pmdarima : should be installed by compiling source! (due to compatibility issue)
+
+# should be installed by compiling source! (due to compatibility issue)
+pmdarima 
+
 cython
 
 # for timesfm
