@@ -23,10 +23,8 @@ statsmodels
 seaborn
 pyro-ppl
 
-# should be installed by compiling source! (due to compatibility issue)
-pmdarima 
-
-cython
+# pmdarima should be installed by compiling source! (due to compatibility with numpy)
+setuptools==58.0.4 # Compatible with `distutils` which is needed for compiling pmdarima
 
 # for timesfm
 jax
