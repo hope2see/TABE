@@ -293,5 +293,5 @@ class Dataset_TABE_Online(Dataset_TABE_File):
             _stock_data_gen(data_path, args.data_asset, args.target_datatype, args.data_start_date, args.data_end_date, args.data_interval)   
 
         root_path = './'
-        super().__init__(args, root_path, flag, size, features, data_path, target, scale, timeenc, freq, seasonal_patterns)
+        super().__init__(args, root_path, data_path, size, flag, features, target, scale, timeenc, freq, seasonal_patterns)
 
