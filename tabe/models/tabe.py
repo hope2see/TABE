@@ -9,13 +9,7 @@ import numpy as np
 import torch
 
 from scipy.stats import norm
-
-import pyro
-import pyro.contrib.gp as gp
-
-from hyperopt import hp, tpe, rand, fmin, Trials, STATUS_OK
-
-from utils.metrics import MAE, MSE, RMSE, MAPE, MSPE
+from sklearn.preprocessing import StandardScaler
 
 from tabe.data_provider.dataset_loader import get_data_provider
 from tabe.models.abstractmodel import AbstractModel
@@ -24,11 +18,6 @@ from tabe.utils.mem_util import MemUtil
 from tabe.utils.misc_util import logger, OptimTracker
 import tabe.utils.weighting as weighting
 import tabe.utils.report as report
-
-smoke_test = "CI" in os.environ  # ignore; used to check code integrity in the Pyro repo
-assert pyro.__version__.startswith('1.9.1')
-pyro.set_rng_seed(0)
-torch.set_default_tensor_type(torch.DoubleTensor)
 
 
 _mem_util = MemUtil(rss_mem=False, python_mem=False)
@@ -42,6 +31,13 @@ class TabeModel(AbstractModel):
         self.adjuster_model = adjuster_model # Model used to adjust. TimeMoE
         self.y_hat = None
         self.truths = None # the last 'y' values. shape = (HPO_EVALUATION_PEROID)
+
+        # scalers used to normalize the training data while performing test (proceed_onestep)
+        self.use_scaler = True 
+        self.scaler_x = StandardScaler() 
+        self.scaler_y = StandardScaler() 
+        self.scaler_x_m = StandardScaler() 
+        self.scaler_y_m = StandardScaler() 
  
 
     def train(self):
@@ -68,15 +64,36 @@ class TabeModel(AbstractModel):
         self.y_hat_cbm = y_hat_cbm
 
 
+    def _normalize_batch(self, batch_x, batch_y, batch_x_mark, batch_y_mark, inverse=False):
+        # batch.shape = (1, seq_len, feature_dim)
+        for batch, scaler in [(batch_x, self.scaler_x), (batch_y, self.scaler_y), 
+                              (batch_x_mark, self.scaler_x_m), (batch_y_mark, self.scaler_y_m)]:
+            batch_np = batch_x.squeeze(0).numpy()
+            if not inverse:
+                scaled_batch_np = scaler.fit_transform(batch_np) 
+            else:
+                scaled_batch_np = scaler.inverse_transform(batch_np) 
+            batch = torch.from_numpy(scaled_batch_np).unsqueeze(0)
+        return batch_x, batch_y, batch_x_mark, batch_y_mark
+
+
     def proceed_onestep(self, batch_x, batch_y, batch_x_mark, batch_y_mark, training: bool = False):
         assert batch_x.shape[0]==1 and batch_y.shape[0]==1
 
         # truth at the next timestep
         y = batch_y[0, -1, -1] 
 
+        if self.use_scaler:
+            batch_x, batch_y, batch_x_mark, batch_y_mark = \
+                self._normalize_batch(batch_x, batch_y, batch_x_mark, batch_y_mark, inverse=False)
+            
         # get combiner model's predition
         y_hat_cbm, y_hat_bsm = self.combiner_model.proceed_onestep(
             batch_x, batch_y, batch_x_mark, batch_y_mark, training)                
+
+        if self.use_scaler:
+            batch_x, batch_y, batch_x_mark, batch_y_mark = \
+                self._normalize_batch(batch_x, batch_y, batch_x_mark, batch_y_mark, inverse=True)
 
         if self.adjuster_model is None:
             y_hat_adj = y_hat_cbm
