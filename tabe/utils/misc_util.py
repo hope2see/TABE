@@ -118,6 +118,8 @@ def print_configs(configs):
     logger.info('')
 
     logger.info("\033[1m" + f"Data {configs.data:<20}" + "\033[0m")
+    train_splits = ', '.join(map(str, configs.data_train_splits))   
+    logger.info(f'  {"Split [val | train | ensemble_train]: ":<20}{train_splits:<20}{"Test: ":<20}{configs.data_test_split:<20}')
     logger.info(f'  {"Features:":<20}{configs.features:<20}{"Target Column:":<20}{configs.target:<20}')
     logger.info(f'  {"Target datatype:":<20}{configs.target_datatype:<20}{"Target Freq:":<20}{configs.freq:<20}')
     if configs.data == 'TABE_ONLINE':
