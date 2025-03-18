@@ -64,17 +64,17 @@ class TabeModel(AbstractModel):
         self.y_hat_cbm = y_hat_cbm
 
 
-    def _normalize_batch(self, batch_x, batch_y, batch_x_mark, batch_y_mark, inverse=False):
-        # batch.shape = (1, seq_len, feature_dim)
-        for batch, scaler in [(batch_x, self.scaler_x), (batch_y, self.scaler_y), 
-                              (batch_x_mark, self.scaler_x_m), (batch_y_mark, self.scaler_y_m)]:
-            batch_np = batch_x.squeeze(0).numpy()
+    def _normalize_batch(self, batch_list, inverse=False):
+        scaler_list = [self.scaler_x, self.scaler_y, self.scaler_x_m, self.scaler_y_m]
+        for i, batch in enumerate(batch_list):
+            scaler = scaler_list[i]
+            batch_np = batch.squeeze(0).numpy() # batch.shape = (1, seq_len, feature_dim)
             if not inverse:
                 scaled_batch_np = scaler.fit_transform(batch_np) 
             else:
                 scaled_batch_np = scaler.inverse_transform(batch_np) 
-            batch = torch.from_numpy(scaled_batch_np).unsqueeze(0)
-        return batch_x, batch_y, batch_x_mark, batch_y_mark
+            batch_list[i] = torch.from_numpy(scaled_batch_np).unsqueeze(0)
+        return batch_list
 
 
     def proceed_onestep(self, batch_x, batch_y, batch_x_mark, batch_y_mark, training: bool = False):
@@ -85,7 +85,7 @@ class TabeModel(AbstractModel):
 
         if self.use_scaler:
             batch_x, batch_y, batch_x_mark, batch_y_mark = \
-                self._normalize_batch(batch_x, batch_y, batch_x_mark, batch_y_mark, inverse=False)
+                self._normalize_batch([batch_x, batch_y, batch_x_mark, batch_y_mark], inverse=False)
             
         # get combiner model's predition
         y_hat_cbm, y_hat_bsm = self.combiner_model.proceed_onestep(
@@ -93,7 +93,7 @@ class TabeModel(AbstractModel):
 
         if self.use_scaler:
             batch_x, batch_y, batch_x_mark, batch_y_mark = \
-                self._normalize_batch(batch_x, batch_y, batch_x_mark, batch_y_mark, inverse=True)
+                self._normalize_batch([batch_x, batch_y, batch_x_mark, batch_y_mark], inverse=True)
 
         if self.adjuster_model is None:
             y_hat_adj = y_hat_cbm
