@@ -31,9 +31,10 @@ class TabeModel(AbstractModel):
         self.adjuster_model = adjuster_model # Model used to adjust. TimeMoE
         self.y_hat = None
         self.truths = None # the last 'y' values. shape = (HPO_EVALUATION_PEROID)
+        self.test_set = None
 
         # scalers used to normalize the training data while performing test (proceed_onestep)
-        self.use_scaler = True 
+        self.use_scaler = configs.use_batch_norm 
         self.scaler_x = StandardScaler() 
         self.scaler_y = StandardScaler() 
         self.scaler_x_m = StandardScaler() 
@@ -111,6 +112,51 @@ class TabeModel(AbstractModel):
         return y_hat_tabe, y_hat_adj, y_hat_cbm, y_hat_bsm
 
 
+    def forecast_onestep(self, invert=True):
+        if self.test_set is None:
+            self.test_set, self.test_loader = get_data_provider(self.configs, flag='test', step_by_step=True)
+            self.y = self.test_set.data_y[self.configs.seq_len:, -1]
+            self.need_to_invert_data = True if (self.test_set.scale and self.configs.inverse) else False
+            self.tabe_pred = np.empty_like(self.y)
+            self.cur_t = 0
+
+        t = self.cur_t
+        if t < len(self.y):
+            batch_x, batch_y, batch_x_mark, batch_y_mark = self.test_set[t]
+            batch_x = torch.tensor(batch_x).unsqueeze(0)
+            batch_y = torch.tensor(batch_y).unsqueeze(0)
+            batch_x_mark = torch.tensor(batch_x_mark).unsqueeze(0)
+            batch_y_mark = torch.tensor(batch_y_mark).unsqueeze(0)
+            fcst, _, _, _ = \
+                self.proceed_onestep(batch_x, batch_y, batch_x_mark, batch_y_mark, training=True)            
+
+            if self.need_to_invert_data:
+                data_final_pred = np.zeros((1, self.test_set.data_y.shape[1]))
+                data_final_pred[:, -1] = fcst
+                fcst = self.test_set.inverse_transform(data_final_pred)[0, -1]
+
+            self.tabe_pred[t] = fcst
+            self.cur_t += 1
+
+            return self.y[t], self.tabe_pred[t]
+        else:
+            return None, None
+
+
+    def test_step_by_step(self):
+        fcsts = []
+        while True:
+            truth, fcst = self.forecast_onestep()
+            if truth is None:
+                logger.info("Test finished.")   
+                break
+            else:
+                logger.info(f"Truth={truth:.5f}, Forecast={fcst:.5f}")
+                fcsts.append(fcst)
+
+        return self.y, np.array(fcsts)
+
+
     def test(self):
         test_set, test_loader = get_data_provider(self.configs, flag='test', step_by_step=True)
         y = test_set.data_y[self.configs.seq_len:, -1]
@@ -125,8 +171,6 @@ class TabeModel(AbstractModel):
         devi_stddev = np.empty_like(y)
 
         for t, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(test_loader):
-            # final_pred[t], y_hat[t], y_hat_cbm[t], y_hat_bsm[:,t], devi_stddev[t] = \
-            #     self.proceed_onestep(batch_x, batch_y, batch_x_mark, batch_y_mark, training=True)            
             tabe_pred[t], y_hat_adj[t], y_hat_cbm[t], y_hat_bsm[:,t] = \
                 self.proceed_onestep(batch_x, batch_y, batch_x_mark, batch_y_mark, training=True)            
             _mem_util.print_memory_usage()

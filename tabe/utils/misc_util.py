@@ -163,6 +163,7 @@ def print_configs(configs):
     logger.info('')
 
     logger.info("\033[1m" + "Run Parameters" + "\033[0m")
+    logger.info(f'  {"Use Batch Normalization:":<20}{configs.use_batch_norm:<20}')
     logger.info(f'  {"Num Workers:":<20}{configs.num_workers:<20}{"Itr:":<20}{configs.itr:<20}')
     logger.info(f'  {"Train Epochs:":<20}{configs.train_epochs:<20}{"Batch Size:":<20}{configs.batch_size:<20}')
     logger.info(f'  {"Patience:":<20}{configs.patience:<20}{"Learning Rate:":<20}{configs.learning_rate:<20}')

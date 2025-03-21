@@ -66,13 +66,13 @@ def plot_forecast(y, y_hat, title=None, filepath=None):
         plt.savefig(filepath, bbox_inches='tight')
 
 
-def plot_forecast_result(truth, adjuster_pred,  adj_pred_q_low, adj_pred_q_high, combiner_pred, base_preds, basemodels, filepath=None):
+def plot_forecast_result(truth, pred,  adj_pred_q_low=None, adj_pred_q_high=None, combiner_pred=None, base_preds=None, basemodels=None, filepath=None):
     plt.figure(figsize=(12, 6))
     plt.title('Forecast Comparison')     
     plt.ylabel('Target')
     plt.xlabel('Test Duration (Days)')
     plt.plot(truth, label='GroundTruth', linewidth=1.5, color='black')
-    plt.plot(adjuster_pred, label="Adjuster Model", linewidth=1.5, color='red')
+    plt.plot(pred, label="Adjuster Model", linewidth=1.5, color='red')
     if adj_pred_q_low is not None:
         plt.fill_between(
             np.linspace(0, len(truth)-1, len(truth)), 
@@ -80,9 +80,11 @@ def plot_forecast_result(truth, adjuster_pred,  adj_pred_q_low, adj_pred_q_high,
             color='red', alpha=0.1,
             label="area in quantiles"
         )                
-    plt.plot(combiner_pred, label="Combiner Model", linewidth=1.5, linestyle="--", color='blue')
-    for i, basemodel in enumerate(basemodels):
-        plt.plot(base_preds[i], label=f"Base Model [{basemodel.name}]", linewidth=1.5, linestyle=":")
+    if combiner_pred is not None:
+        plt.plot(combiner_pred, label="Combiner Model", linewidth=1.5, linestyle="--", color='blue')
+    if base_preds is not None:
+        for i, basemodel in enumerate(basemodels):
+            plt.plot(base_preds[i], label=f"Base Model [{basemodel.name}]", linewidth=1.5, linestyle=":")
     plt.legend()
     if filepath is None:
         plt.show()
@@ -152,12 +154,14 @@ def plot_gpmodel(gpm, plot_observed_data=True, plot_predictions=True, n_test=500
 def _measure_loss(p,t):
     return MAE(p,t), MSE(p,t), RMSE(p,t), MAPE(p,t), MSPE(p,t)
 
-def report_losses(y, y_hat_adj, y_hat_cbm, y_hat_bsm, basemodels):
+def report_losses(y, y_hat, y_hat_cbm=None, y_hat_bsm=None, basemodels=None):
     df = pd.DataFrame()
-    df['Adjuster'] = _measure_loss(y_hat_adj, y)
-    df['Combiner'] = _measure_loss(y_hat_cbm, y)
-    for i, bm in enumerate(basemodels):
-        df[bm.name] = _measure_loss(y_hat_bsm[i], y)
+    df['Adjuster'] = _measure_loss(y_hat, y)
+    if y_hat_cbm is not None:
+        df['Combiner'] = _measure_loss(y_hat_cbm, y)
+    if y_hat_bsm is not None:
+        for i, bm in enumerate(basemodels):
+            df[bm.name] = _measure_loss(y_hat_bsm[i], y)
     df.index = ['MAE', 'MSE', 'RMSE', 'MAPE', 'MSPE']
     print_dataframe(df, 'Model Losses')
 
@@ -180,14 +184,16 @@ def _measure_classifier_performance(truths, predictions, classification_method='
     return precision, recall, f1, auc
 
 
-def report_classifier_performance(y, y_hat_adj, y_hat_cbm, y_hat_bsm, basemodels, filepath=None):
+def report_classifier_performance(y, y_hat, y_hat_cbm=None, y_hat_bsm=None, basemodels=None, filepath=None):
     # for cl_method in ['up_down', 'up_down_sideway']:
     for cl_method in ['up_down']:
         df = pd.DataFrame() 
-        df['Adjuster'] = _measure_classifier_performance(y, y_hat_adj, cl_method)
-        df['Combiner'] = _measure_classifier_performance(y, y_hat_cbm, cl_method)
-        for i, bm in enumerate(basemodels):
-            df[bm.name] = _measure_classifier_performance(y, y_hat_bsm[i], cl_method)
+        df['Adjuster'] = _measure_classifier_performance(y, y_hat, cl_method)
+        if y_hat_cbm is not None:
+            df['Combiner'] = _measure_classifier_performance(y, y_hat_cbm, cl_method)
+        if y_hat_bsm is not None:
+            for i, bm in enumerate(basemodels):
+                df[bm.name] = _measure_classifier_performance(y, y_hat_bsm[i], cl_method)
         df.index = ['Precision', 'Recall', 'F1', 'AUC']
     print_dataframe(df, 'Classifier Performance', filepath=filepath)
 

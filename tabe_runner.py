@@ -72,12 +72,12 @@ def _get_parser(model_name=None):
         parser.add_argument('--task_name', type=str, required=False, default='long_term_forecast',
                             help='task name, options:[long_term_forecast, short_term_forecast, imputation, classification, anomaly_detection]')
         parser.add_argument('--is_training', type=int, required=False, default=1, help='status')
-        parser.add_argument('--model_id', type=str, required=True, default='test', help='model id')
-        parser.add_argument('--model', type=str, required=True, default='TABE',
+        parser.add_argument('--model_id', type=str, required=False, default='TABE1.0', help='model id')
+        parser.add_argument('--model', type=str, required=False, default='TABE',
                             help='model name, options: [DLinear, PatchTST, iTransformer, TimeXer, CMamba, TimeMoE, TABE]')
 
         # data loader
-        parser.add_argument('--data', type=str, required=True, default='TABE_FILE', help='dataset type')
+        parser.add_argument('--data', type=str, required=False, default='TABE_FILE', help='dataset type')
         parser.add_argument('--root_path', type=str, default='./dataset/', help='root path of the data file')
         parser.add_argument('--data_path', type=str, default='BTC-USD_LogRet_2021-01-01_2023-01-01_1d.csv', help='data file')
         parser.add_argument('--features', type=str, default='MS',
@@ -92,8 +92,8 @@ def _get_parser(model_name=None):
         parser.add_argument('--data_interval', type=str, default='1d', help='interval parameter for downloading')
         parser.add_argument('--target_datatype', type=str, default='LogRet',
                             help='value type of target data :[Unknown, Price, Ret, LogRet]')
-        parser.add_argument('--data_test_split', type=str, default='0.2', help='ratio (0.2), or length (100), or start_date (\'2020-01-01\') of the test_period')
-        parser.add_argument('--data_train_splits', type=float, nargs='+', default=[0.2, 0.6, 0.2], 
+        parser.add_argument('--data_test_split', type=str, default='0.3', help='ratio (0.3), or length (100), or start_date (\'2020-01-01\') of the test_period')
+        parser.add_argument('--data_train_splits', type=float, nargs='+', default=[0.3, 0.6, 0.1], 
                             help='[val, base_train, ensemble_train] ratios for the period before test period')
         
         # trading simulation 
@@ -106,8 +106,8 @@ def _get_parser(model_name=None):
                             help='The threshold of model\'s estimated probability for the predicted_return to be over buy_threshold_ret [0.0 ~ 1.0]')
 
         # forecasting task
-        parser.add_argument('--seq_len', type=int, default=32, help='input sequence length')
-        parser.add_argument('--label_len', type=int, default=32, help='start token length')
+        parser.add_argument('--seq_len', type=int, default=96, help='input sequence length')
+        parser.add_argument('--label_len', type=int, default=96, help='start token length')
         parser.add_argument('--pred_len', type=int, default=1, help='prediction sequence length')
         parser.add_argument('--inverse', action='store_true', help='inverse output data', default=True)
         parser.add_argument('--seasonal_patterns', type=str, default='Monthly', help='subset for M4') # used only for M4 dataset
@@ -255,6 +255,8 @@ def _get_parser(model_name=None):
     parser.add_argument('--smoothing_factor', type=float, default=0.0, help="")
     parser.add_argument('--max_models', type=float, default=0.0, help="")
     
+    # batch-normalization
+    parser.add_argument('--use_batch_norm', type=bool, default=False)
 
     # Adjuster
     parser.add_argument('--adjuster_model', type=str, default='none', help='model used to adjust combiner\'s prediction. [none, gpm, moe]')
@@ -349,7 +351,7 @@ def _create_base_model(configs, device, model_name) -> AbstractModel:
     return model
 
 
-def _report_results(configs, result_dir, y, y_hat_adj, y_hat_cbm, y_hat_bsm, basemodels):
+def _report_results(configs, result_dir, y, y_hat_adj, y_hat_cbm=None, y_hat_bsm=None, basemodels=None):
 
     report.report_losses(y, y_hat_adj, y_hat_cbm, y_hat_bsm, basemodels)
 
@@ -365,9 +367,11 @@ def _report_results(configs, result_dir, y, y_hat_adj, y_hat_cbm, y_hat_bsm, bas
     # df_fcst_result[f'Adjuster_q_low_{configs.quantile}'] = y_hat_q_low
     # df_fcst_result[f'Adjuster_q_high_{configs.quantile}'] = y_hat_q_high
     # df_fcst_result['Adjuster_devi_sd'] = devi_stddev
-    df_fcst_result['Combiner'] = y_hat_cbm
-    for i, bm in enumerate(basemodels):
-        df_fcst_result[bm.name] = y_hat_bsm[i]
+    if y_hat_cbm is not None:
+        df_fcst_result['Combiner'] = y_hat_cbm
+    if y_hat_bsm is not None:
+        for i, bm in enumerate(basemodels):
+            df_fcst_result[bm.name] = y_hat_bsm[i]
     df_fcst_result.to_csv(path_or_buf=result_dir + "/forecast_results.csv", index=False)
 
     # Trading Simulations ---------------
@@ -379,9 +383,11 @@ def _report_results(configs, result_dir, y, y_hat_adj, y_hat_cbm, y_hat_bsm, bas
             y = np.exp(y) - 1
             y_hat_adj = np.exp(y_hat_adj) - 1
             # y_hat_q_low = np.exp(y_hat_q_low) - 1
-            y_hat_cbm = np.exp(y_hat_cbm) - 1
-            for i in range(len(y_hat_bsm)):
-                y_hat_bsm[i] = np.exp(y_hat_bsm[i]) - 1
+            if y_hat_cbm is not None:
+                y_hat_cbm = np.exp(y_hat_cbm) - 1
+            if y_hat_bsm is not None:
+                for i in range(len(y_hat_bsm)):
+                    y_hat_bsm[i] = np.exp(y_hat_bsm[i]) - 1
         else: # if target_datatype == 'Ret':
             pass # nothing to do
 
@@ -392,10 +398,12 @@ def _report_results(configs, result_dir, y, y_hat_adj, y_hat_cbm, y_hat_bsm, bas
                 df_sim_result = pd.DataFrame() 
                 df_sim_result['Adjuster'] = simulate_trading(y, y_hat_adj, strategy, None, apply_threshold_prob, 
                                                              buy_threshold=configs.buy_threshold_ret, buy_threshold_q=None, fee_rate=configs.fee_rate)
-                df_sim_result['Combiner'] = simulate_trading(y, y_hat_cbm, strategy, None, apply_threshold_prob,
+                if y_hat_cbm is not None:
+                    df_sim_result['Combiner'] = simulate_trading(y, y_hat_cbm, strategy, None, apply_threshold_prob,
                                                              buy_threshold=configs.buy_threshold_ret, buy_threshold_q=None, fee_rate=configs.fee_rate)
-                for i, bm in enumerate(basemodels):
-                    df_sim_result[bm.name] = simulate_trading(y, y_hat_bsm[i], strategy=strategy,
+                if y_hat_bsm is not None:
+                    for i, bm in enumerate(basemodels):
+                        df_sim_result[bm.name] = simulate_trading(y, y_hat_bsm[i], strategy=strategy,
                                                              buy_threshold=configs.buy_threshold_ret, buy_threshold_q=None, fee_rate=configs.fee_rate)
                 df_sim_result.index = ['Acc. ROI', 'Mean ROI', '# Trades', '# Win_Trades', 'Winning Rate']
                 report.report_trading_simulation(df_sim_result, 
@@ -414,7 +422,7 @@ def _cleanup_gpu_cache(configs):
         torch.cuda.empty_cache()
 
 
-def run(args=None):
+def create_tabe(args):
     _set_seed()
 
     configs = _get_parser().parse_args(args)
@@ -446,12 +454,6 @@ def run(args=None):
         if model_args is not None:
             bm_configs = copy.deepcopy(configs)
             bm_configs.__dict__.update(model_args.__dict__) # add/update with model-specific arguments
-        # FIX 
-        # if model_name == 'TimeMoE':
-        #     basemodels.append(TimeMoE(bm_configs, device, name='TimeMoE-Base', ds_size='base'))
-        #     basemodels.append(TimeMoE(bm_configs, device, name='TimeMoE-Large', ds_size='large'))
-        #     # basemodels.append(TimeMoE(bm_configs, device, name='TimeMoE-Ultra', ds_size='ultra'))
-        # else:
         basemodels.append(_create_base_model(bm_configs, device, model_name))
     
     combiner_configs = configs
@@ -475,23 +477,31 @@ def run(args=None):
             raise ValueError(f"Model {configs.adjuster_model} is not supported as an Adjuster model")
 
     tabeModel = TabeModel(configs, combinerModel, adjusterModel)
+    return tabeModel, result_dir, basemodels
+    
+
+def destroy_tabe(tabeModel):
+    _mem_util.print_memory_usage()
+    _mem_util.stop_python_memory_tracking()
+    _cleanup_gpu_cache(tabeModel.configs)
+
+
+def _run(args=None):
+    tabeModel, result_dir, basemodels = create_tabe(args)
 
     logger.info('Training Tabe model ======================\n')
     tabeModel.train()    
     
     logger.info('Testing ==================================\n')
-    y, y_hat_adj, y_hat_cbm, y_hat_bsm, y_hat_q_low, y_hat_q_high, buy_threshold_q, devi_stddev = tabeModel.test()
-        
-    _mem_util.print_memory_usage()
+    # y, y_hat_adj, y_hat_cbm, y_hat_bsm, y_hat_q_low, y_hat_q_high, buy_threshold_q, devi_stddev = tabeModel.test()
+    # _report_results(tabeModel.configs, result_dir, y, y_hat_adj, y_hat_cbm, y_hat_bsm, basemodels)        
 
-    _report_results(configs, result_dir, y, y_hat_adj, y_hat_cbm, y_hat_bsm, basemodels)
+    y, fcst = tabeModel.test_step_by_step()
+    _report_results(tabeModel.configs, result_dir, y, fcst)
 
-    _cleanup_gpu_cache(configs)
-
-    _mem_util.stop_python_memory_tracking()
-
+    destroy_tabe(tabeModel)
     logger.info('Bye ~~~~~~')
 
 
 if __name__ == '__main__':
-    run()
+    _run()
