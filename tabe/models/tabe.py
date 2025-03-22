@@ -130,15 +130,17 @@ class TabeModel(AbstractModel):
             fcst, _, _, _ = \
                 self.proceed_onestep(batch_x, batch_y, batch_x_mark, batch_y_mark, training=True)            
 
+            truth = self.y[t]
             if self.need_to_invert_data:
-                data_final_pred = np.zeros((1, self.test_set.data_y.shape[1]))
-                data_final_pred[:, -1] = fcst
-                fcst = self.test_set.inverse_transform(data_final_pred)[0, -1]
+                data_tf = np.zeros((1, self.test_set.data_y.shape[1]))
+                data_tf[:, -1] = fcst
+                fcst = self.test_set.inverse_transform(data_tf)[0, -1]
+                data_tf[:, -1] = truth
+                truth = self.test_set.inverse_transform(data_tf)[0, -1]
 
             self.tabe_pred[t] = fcst
             self.cur_t += 1
-
-            return self.y[t], self.tabe_pred[t]
+            return truth, fcst
         else:
             return None, None
 
