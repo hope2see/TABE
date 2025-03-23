@@ -106,7 +106,9 @@ def _stock_data_gen(
 
     # -------------------------
 
-    del df["Close"]
+    # del df["Close"]
+    df.rename(columns={'Close': 'price'}, inplace=True)
+
     df = df.dropna()
 
     df.reset_index(inplace=True)
@@ -249,11 +251,14 @@ class Dataset_TABE_File(Dataset):
 
         self.data_x = data[border1:border2]
         self.data_y = data[border1:border2]
-
         # if self.set_type == 0 and self.args.augmentation_ratio > 0:
         #     self.data_x, self.data_y, augmentation_tags = run_augmentation_single(self.data_x, self.data_y, self.args)
-
         self.data_stamp = data_stamp
+
+        # df_raw is used for testing & trade simulation 
+        if self.set_type == 3: # test 
+            self.df_raw = df_raw[-num_test:].reset_index(drop=True) 
+
 
     def __getitem__(self, index):
         s_begin = index
@@ -276,22 +281,22 @@ class Dataset_TABE_File(Dataset):
             return self.scaler.inverse_transform(data)
         else :
             return data
-
-
+        
+    
 class Dataset_TABE_Online(Dataset_TABE_File):
-    def __init__(self, args, root_path=None, flag='base_train', size=None,
+    def __init__(self, args, root_path='./dataset', flag='base_train', size=None,
                  features='S', data_path=None,
                  target='OT', scale=True, timeenc=0, freq='h', seasonal_patterns=None):        
         
-        data_path = "dataset/" + args.data_asset  + '_' + args.target_datatype + '_' \
+        data_path = args.data_asset  + '_' + args.target_datatype + '_' \
             + args.data_start_date + '_' + args.data_end_date + '_' + args.data_interval + '.csv'
+        full_path = root_path + '/' + data_path
 
-        if not os.path.exists(data_path):
-            pathdir = os.path.dirname(data_path)
+        if not os.path.exists(full_path):
+            pathdir = os.path.dirname(full_path)
             if not os.path.exists(pathdir):
                 os.makedirs(pathdir)
-            _stock_data_gen(data_path, args.data_asset, args.target_datatype, args.data_start_date, args.data_end_date, args.data_interval)   
+            _stock_data_gen(full_path, args.data_asset, args.target_datatype, args.data_start_date, args.data_end_date, args.data_interval)   
 
-        root_path = './'
         super().__init__(args, root_path, data_path, size, flag, features, target, scale, timeenc, freq, seasonal_patterns)
 

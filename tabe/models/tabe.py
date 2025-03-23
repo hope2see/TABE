@@ -114,7 +114,7 @@ class TabeModel(AbstractModel):
 
     def forecast_onestep(self, invert=True):
         if self.test_set is None:
-            self.test_set, self.test_loader = get_data_provider(self.configs, flag='test', step_by_step=True)
+            self.test_set, _ = get_data_provider(self.configs, flag='test', step_by_step=True)
             self.y = self.test_set.data_y[self.configs.seq_len:, -1]
             self.need_to_invert_data = True if (self.test_set.scale and self.configs.inverse) else False
             self.tabe_pred = np.empty_like(self.y)
@@ -140,20 +140,20 @@ class TabeModel(AbstractModel):
 
             self.tabe_pred[t] = fcst
             self.cur_t += 1
-            return truth, fcst
+            return truth, fcst, self.test_set.df_raw.at[t,'date'], self.test_set.df_raw.at[t,'price']
         else:
-            return None, None
+            return None, None, None, None
 
 
     def test_step_by_step(self):
         fcsts = []
         while True:
-            truth, fcst = self.forecast_onestep()
+            truth, fcst, date, price = self.forecast_onestep()
             if truth is None:
                 logger.info("Test finished.")   
                 break
             else:
-                logger.info(f"Truth={truth:.5f}, Forecast={fcst:.5f}")
+                logger.info(f"{date} price={price:.1f}, Truth={truth:.5f}, Forecast={fcst:.5f}")
                 fcsts.append(fcst)
 
         return self.y, np.array(fcsts)
