@@ -9,7 +9,7 @@ python -u tabe_runner.py \
     --model TABE \
     --model_id $test_name'_('$desc')' \
     --data TABE_FILE --data_path 'TSLA_LogRet_2020-01-01_2025-03-01_1d.csv' \
-    --data_test_split 252 --data_train_splits 0.45 0.5 0.05 \
+    --data_test_split 252 --data_train_splits 0.43 0.5 0.07 \
     --seq_len 32 --label_len 32 \
     --train_epochs 10  \
     --basemodel 'ETS' \
