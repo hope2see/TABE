@@ -57,7 +57,7 @@ class CombinerModel(AbstractModel):
         self.basemodel_losses = None # the last basemodel_losses. Shape = (len(basemodels), HPO_EVALUATION_PEROID)
         self.truths = None # the last 'y' values. Shape = (HPO_EVALUATION_PEROID)
         self.hpo_policy = self.configs.hpo_policy
-        if self.hpo_policy == 0 :
+        if self.hpo_policy == 0 : # No HPO
             self.hp_dict = {
                 'lookback_window':self.configs.lookback_win, # for weighting 
                 'discount_factor':self.configs.discount_factor,
@@ -150,7 +150,7 @@ class CombinerModel(AbstractModel):
         return self.best_hp, trials
 
 
-    def _train_basemodels(self):
+    def train_basemodels(self):
         if self.configs.is_training:
             logger.info('Training base models ==================================\n')
             for basemodel in self.basemodels:
@@ -163,13 +163,11 @@ class CombinerModel(AbstractModel):
                 basemodel.load_saved_model()
 
 
-    def train(self):
-        # Train combiner model -------------------------------------
-        self._train_basemodels()
+    def train(self, train_dataset=None, train_loader=None):
+        if train_dataset is None :
+            train_dataset, train_loader = get_data_provider(self.configs, flag='ensemble_train', step_by_step=True)
 
         time_now = time.time()
-
-        train_dataset, train_loader = get_data_provider(self.configs, flag='ensemble_train', step_by_step=True)
 
         basemodel_preds = np.empty((len(self.basemodels), len(train_loader)))
         basemodel_losses = np.empty((len(self.basemodels), len(train_loader)))
@@ -184,9 +182,12 @@ class CombinerModel(AbstractModel):
         spent_time = (time.time() - time_now) 
         logger.info(f"CombinerModel.train() : {spent_time:.4f} sec elapsed for getting base models' predictions")
 
-        if self.hpo_policy == 0: 
-            self.basemodel_losses = basemodel_losses[:, -self.MAX_LOOKBACK_WIN:]
-            self.truths = train_dataset.data_y[-self.MAX_LOOKBACK_WIN:, -1]
+        if self.hpo_policy == 0: # No HPO
+            lookback_window = int(self.hp_dict['lookback_window'])
+            assert basemodel_losses.shape[1] >= lookback_window, \
+                    f'basemodel_losses.shape[1]) {basemodel_losses.shape[1]} is shorter than lookback_window ({lookback_window})'
+            self.basemodel_losses = basemodel_losses[:, -lookback_window:]
+            self.truths = train_dataset.data_y[-lookback_window:, -1]
         else:
             assert self.HPO_PERIOD <= len(train_loader), \
                     f'length of train data ({len(train_loader)}) should be longer than HPO_PERIOD({self.HPO_PERIOD})'     

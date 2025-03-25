@@ -75,6 +75,7 @@ def _get_parser(model_name=None):
         parser.add_argument('--model_id', type=str, required=False, default='TABE1.0', help='model id')
         parser.add_argument('--model', type=str, required=False, default='TABE',
                             help='model name, options: [DLinear, PatchTST, iTransformer, TimeXer, CMamba, TimeMoE, TABE]')
+        parser.add_argument('--tabe_root_path', type=str, default='.', help='root path of tabe directory tree')
 
         # data loader
         parser.add_argument('--data', type=str, required=False, default='TABE_FILE', help='dataset type')
@@ -83,12 +84,13 @@ def _get_parser(model_name=None):
         parser.add_argument('--features', type=str, default='MS',
                             help='forecasting task, options:[M, S, MS]; M:multichannel predict multichannel, S:unichannel predict unichannel, MS:multichannel predict unichannel')
         parser.add_argument('--target', type=str, default='OT', help='target feature in S or MS task')
-        parser.add_argument('--freq', type=str, default='d',
-                            help='freq for time features encoding, options:[s:secondly, t:minutely, h:hourly, d:daily, b:business days, w:weekly, m:monthly], you can also use more detailed freq like 15min or 3h')
         parser.add_argument('--checkpoints', type=str, default='./checkpoints/', help='location of model checkpoints')
         parser.add_argument('--data_asset', type=str, default='BTC-USD', help='ticker of asset')
         parser.add_argument('--data_start_date', type=str, default='2021-01-01', help='start date for the data to download. Used for TABE_ONLINE data')
         parser.add_argument('--data_end_date', type=str, default='2023-01-01', help='end date for the data to download. Used for TABE_ONLINE data')
+        # TODO : FIX the duplicaation of 'freq' and 'data_interval' 
+        parser.add_argument('--freq', type=str, default='d', 
+                            help='freq for time features encoding, options:[s:secondly, t:minutely, h:hourly, d:daily, b:business days, w:weekly, m:monthly], you can also use more detailed freq like 15min or 3h')
         parser.add_argument('--data_interval', type=str, default='1d', help='interval parameter for downloading')
         parser.add_argument('--target_datatype', type=str, default='LogRet',
                             help='value type of target data :[Unknown, Price, Ret, LogRet]')
@@ -426,11 +428,14 @@ def create_tabe(args):
     _set_seed()
 
     configs = _get_parser().parse_args(args)
-    _set_device_configs(configs)
 
+    if len(configs.basemodel) == 0:
+        raise ValueError("At least one base model should be specified in the configuration.")
+
+    _set_device_configs(configs)
     set_experiment_sig(configs)
 
-    result_dir = "./result/" + experiment_sig()
+    result_dir = configs.tabe_root_path + "/result/" + experiment_sig()
     if not os.path.exists(result_dir):
         os.makedirs(result_dir)
 
@@ -493,11 +498,12 @@ def _run(args=None):
     tabeModel.train()    
     
     logger.info('Testing ==================================\n')
-    # y, y_hat_adj, y_hat_cbm, y_hat_bsm, y_hat_q_low, y_hat_q_high, buy_threshold_q, devi_stddev = tabeModel.test()
-    # _report_results(tabeModel.configs, result_dir, y, y_hat_adj, y_hat_cbm, y_hat_bsm, basemodels)        
 
-    y, fcst = tabeModel.test_step_by_step()
-    _report_results(tabeModel.configs, result_dir, y, fcst)
+    y, tabe_pred, y_hat_cbm, y_hat_bsm, y_hat_q_low, y_hat_q_high, buy_threshold_q, devi_stddev = tabeModel.test()
+    _report_results(tabeModel.configs, result_dir, y, tabe_pred, y_hat_cbm, y_hat_bsm, basemodels)        
+
+    # y, fcst = tabeModel.test_step_by_step()
+    # _report_results(tabeModel.configs, result_dir, y, fcst)
 
     destroy_tabe(tabeModel)
     logger.info('Bye ~~~~~~')

@@ -39,12 +39,18 @@ class TabeModel(AbstractModel):
         self.scaler_y = StandardScaler() 
         self.scaler_x_m = StandardScaler() 
         self.scaler_y_m = StandardScaler() 
+
+        if self.configs.is_training:
+            assert self.configs.data != 'TABE_Live'
+            self.combiner_model.train_basemodels()
  
 
-    def train(self):
-        self.combiner_model.train()
+    def train(self, train_dataset=None, train_loader=None):
+        if train_dataset is None :
+            train_dataset, train_loader = get_data_provider(self.configs, flag='ensemble_train', step_by_step=True)
+        
+        self.combiner_model.train(train_dataset, train_loader)
 
-        train_dataset, train_loader = get_data_provider(self.configs, flag='ensemble_train', step_by_step=True)
         y = train_dataset.data_y[self.configs.seq_len:, -1] # the next timestep truth [-1] is excluded
         assert len(y) == len(train_loader)
 
@@ -112,51 +118,73 @@ class TabeModel(AbstractModel):
         return y_hat_tabe, y_hat_adj, y_hat_cbm, y_hat_bsm
 
 
-    def forecast_onestep(self, invert=True):
-        if self.test_set is None:
-            self.test_set, _ = get_data_provider(self.configs, flag='test', step_by_step=True)
-            self.y = self.test_set.data_y[self.configs.seq_len:, -1]
-            self.need_to_invert_data = True if (self.test_set.scale and self.configs.inverse) else False
-            self.tabe_pred = np.empty_like(self.y)
-            self.cur_t = 0
+    # def forecast_onestep(self, batch_x, batch_y, batch_x_mark, batch_y_mark, invert=True):
+    def forecast_onestep(self, test_set, df_new_data):
+        batch_x, batch_y, batch_x_mark, batch_y_mark, = test_set.feed_data(df_new_data)
+        truth = batch_y[-1, -1]
 
-        t = self.cur_t
-        if t < len(self.y):
-            batch_x, batch_y, batch_x_mark, batch_y_mark = self.test_set[t]
-            batch_x = torch.tensor(batch_x).unsqueeze(0)
-            batch_y = torch.tensor(batch_y).unsqueeze(0)
-            batch_x_mark = torch.tensor(batch_x_mark).unsqueeze(0)
-            batch_y_mark = torch.tensor(batch_y_mark).unsqueeze(0)
-            fcst, _, _, _ = \
-                self.proceed_onestep(batch_x, batch_y, batch_x_mark, batch_y_mark, training=True)            
+        batch_x = torch.tensor(batch_x).unsqueeze(0)
+        batch_y = torch.tensor(batch_y).unsqueeze(0)
+        batch_x_mark = torch.tensor(batch_x_mark).unsqueeze(0)
+        batch_y_mark = torch.tensor(batch_y_mark).unsqueeze(0)
+        fcst, _, _, _ = \
+            self.proceed_onestep(batch_x, batch_y, batch_x_mark, batch_y_mark, training=True)            
 
-            truth = self.y[t]
-            if self.need_to_invert_data:
-                data_tf = np.zeros((1, self.test_set.data_y.shape[1]))
-                data_tf[:, -1] = fcst
-                fcst = self.test_set.inverse_transform(data_tf)[0, -1]
-                data_tf[:, -1] = truth
-                truth = self.test_set.inverse_transform(data_tf)[0, -1]
+        if test_set.scale:
+            data_tf = np.zeros((1, test_set.data_y.shape[1]))
+            data_tf[:, -1] = fcst
+            fcst = test_set.inverse_transform(data_tf)[0, -1]
+            data_tf[:, -1] = truth
+            truth = test_set.inverse_transform(data_tf)[0, -1]
 
-            self.tabe_pred[t] = fcst
-            self.cur_t += 1
-            return truth, fcst, self.test_set.df_raw.at[t,'date'], self.test_set.df_raw.at[t,'price']
-        else:
-            return None, None, None, None
+        return truth, fcst, None, None
 
 
-    def test_step_by_step(self):
-        fcsts = []
-        while True:
-            truth, fcst, date, price = self.forecast_onestep()
-            if truth is None:
-                logger.info("Test finished.")   
-                break
-            else:
-                logger.info(f"{date} price={price:.1f}, Truth={truth:.5f}, Forecast={fcst:.5f}")
-                fcsts.append(fcst)
+    # def forecast_onestep(self, invert=True):
+    #     if self.test_set is None:
+    #         self.test_set, _ = get_data_provider(self.configs, flag='test', step_by_step=True)
+    #         self.y = self.test_set.data_y[self.configs.seq_len:, -1]
+    #         self.need_to_invert_data = True if (self.test_set.scale and self.configs.inverse) else False
+    #         self.tabe_pred = np.empty_like(self.y)
+    #         self.cur_t = 0
 
-        return self.y, np.array(fcsts)
+    #     t = self.cur_t
+    #     if t < len(self.y):
+    #         batch_x, batch_y, batch_x_mark, batch_y_mark = self.test_set[t]
+    #         batch_x = torch.tensor(batch_x).unsqueeze(0)
+    #         batch_y = torch.tensor(batch_y).unsqueeze(0)
+    #         batch_x_mark = torch.tensor(batch_x_mark).unsqueeze(0)
+    #         batch_y_mark = torch.tensor(batch_y_mark).unsqueeze(0)
+    #         fcst, _, _, _ = \
+    #             self.proceed_onestep(batch_x, batch_y, batch_x_mark, batch_y_mark, training=True)            
+
+    #         truth = self.y[t]
+    #         if self.need_to_invert_data:
+    #             data_tf = np.zeros((1, self.test_set.data_y.shape[1]))
+    #             data_tf[:, -1] = fcst
+    #             fcst = self.test_set.inverse_transform(data_tf)[0, -1]
+    #             data_tf[:, -1] = truth
+    #             truth = self.test_set.inverse_transform(data_tf)[0, -1]
+
+    #         self.tabe_pred[t] = fcst
+    #         self.cur_t += 1
+    #         return truth, fcst, self.test_set.df_raw.at[t,'date'], self.test_set.df_raw.at[t,'Close']
+    #     else:
+    #         return None, None, None, None
+
+
+    # def test_step_by_step(self):
+    #     fcsts = []
+    #     while True:
+    #         truth, fcst, date, price = self.forecast_onestep()
+    #         if truth is None:
+    #             logger.info("Test finished.")   
+    #             break
+    #         else:
+    #             logger.info(f"{date} price={price:.1f}, Truth={truth:.5f}, Forecast={fcst:.5f}")
+    #             fcsts.append(fcst)
+
+    #     return self.y, np.array(fcsts)
 
 
     def test(self):

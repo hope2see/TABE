@@ -4,11 +4,10 @@ import pandas as pd
 from utils.timefeatures import time_features
 from torch.utils.data import Dataset, DataLoader
 from tabe.utils.misc_util import logger
-from tabe.data_provider.dataset_tabe import Dataset_TABE_File, Dataset_TABE_Online
+from tabe.data_provider.dataset_tabe import Dataset_TABE_File, Dataset_TABE_Online, Dataset_TABE_Live
 
 import warnings
 warnings.filterwarnings('ignore')
-
 
 
 data_dict = {
@@ -26,18 +25,16 @@ data_dict = {
     # 'UEA': UEAloader,
     'TABE_FILE': Dataset_TABE_File,
     'TABE_ONLINE': Dataset_TABE_Online,
+    'TABE_Live': Dataset_TABE_Live,
 }
 
 
-def _data_provider(configs, flag, step_by_step=False):
+def _data_provider(configs, flag, step_by_step=False, df_raw=None):
     Data = data_dict[configs.data]
     timeenc = 0 if configs.embed != 'timeF' else 1
-
-    # shuffle_flag = False if (flag == 'test' or flag == 'TEST') else True
     shuffle_flag = False if (flag == 'test' or flag == 'TEST' or step_by_step) else True
     drop_last = False
     batch_size = configs.batch_size if not step_by_step else 1
-    freq = configs.freq
 
     if configs.task_name == 'anomaly_detection':
         drop_last = False
@@ -71,18 +68,27 @@ def _data_provider(configs, flag, step_by_step=False):
     else:
         if configs.data == 'm4':
             drop_last = False
-        data_set = Data(
-            args = configs,
-            root_path=configs.root_path,
-            data_path=configs.data_path,
-            flag=flag,
-            size=[configs.seq_len, configs.label_len, configs.pred_len],
-            features=configs.features,
-            target=configs.target,
-            timeenc=timeenc,
-            freq=freq,
-            seasonal_patterns=configs.seasonal_patterns
-        )
+        if configs.data in ['TABE_FILE', 'TABE_ONLINE']:
+            data_set = Data(configs, 
+                [configs.seq_len, configs.label_len, configs.pred_len],
+                flag, timeenc)            
+        elif configs.data == 'TABE_Live':
+            data_set = Data(configs, 
+                [configs.seq_len, configs.label_len, configs.pred_len],
+                flag, timeenc, df_raw)   
+        else:
+            data_set = Data(
+                args = configs,
+                root_path=configs.root_path,
+                data_path=configs.data_path,
+                flag=flag,
+                size=[configs.seq_len, configs.label_len, configs.pred_len],
+                features=configs.features,
+                target=configs.target,
+                timeenc=timeenc,
+                freq=configs.freq,
+                seasonal_patterns=configs.seasonal_patterns
+            )
         data_loader = DataLoader(
             data_set,
             batch_size=batch_size,
@@ -99,10 +105,16 @@ def _data_provider(configs, flag, step_by_step=False):
 # has been created before, then the cached objects are retunred. 
 _cache_dataset = {}
 _cache_dataloader = {}
-def get_data_provider(configs, flag, step_by_step=False):
-    key = flag
-    if step_by_step:
-        key += '_stb'
+def get_data_provider(configs, flag, step_by_step=False, df_raw=None):
+    if configs.data == 'Dataset_TABE_Live':
+        key = configs.data # Dataset_TABE_Live is shared for all flag (ensemble_train, train)
+    else :
+        key = configs.data + flag
+    
     if key not in _cache_dataset:
-        _cache_dataset[key], _cache_dataloader[key] = _data_provider(configs, flag, step_by_step)
+        _cache_dataset[key], _cache_dataloader[key] = _data_provider(configs, flag, step_by_step, df_raw)
+
+    if configs.data == 'Dataset_TABE_Live':
+        _cache_dataset[key].set_flag(flag)
+
     return _cache_dataset[key], _cache_dataloader[key]
