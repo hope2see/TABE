@@ -3,15 +3,14 @@ export PYTHONPATH=$PYTHONPATH:./Time-Series-Library
 
 test_name='Test_Default'
 
-desc='all_models_BTC'
+desc='all_models_TSLA'
 
-python -u run.py \
+python -u tabe_runner.py \
     --model TABE \
     --model_id $test_name'_('$desc')' \
-    --data TABE_FILE --data_path 'BTC-USD_LogRet_2022-01-01_2025-01-01_1d.csv' \
-    --data_test_split 0.3 \
-    --data_train_splits 0.4 0.55 0.05 \
-    --seq_len 256 --label_len 256 \
+    --data TABE_FILE --data_path 'TSLA_LogRet_2020-01-01_2025-03-01_1d.csv' \
+    --data_test_split 252 --data_train_splits 0.45 0.5 0.05 \
+    --seq_len 32 --label_len 32 \
     --train_epochs 10  \
     --basemodel 'ETS' \
     --basemodel 'AutoSARIMA' \
@@ -27,15 +26,14 @@ python -u run.py \
     # --basemodel 'PatchTST --batch_size 16' \
 
 
-desc='all_models_SPY'
+desc='all_models_BTC'
 
-python -u run.py \
+python -u tabe_runner.py \
     --model TABE \
     --model_id $test_name'_('$desc')' \
-    --data TABE_FILE --data_path 'SPY_LogRet_2023-01-01_2025-01-01_1d.csv' \
-    --data_test_split 0.2 \
-    --data_train_splits 0.4 0.5 0.1 \
-    --seq_len 128 --label_len 128 \
+    --data TABE_FILE --data_path 'BTC-USD_LogRet_2021-01-01_2023-01-01_1d.csv' \
+    --data TABE_FILE --data_path BTC-USD_LogRet_2021-01-01_2023-01-01_1d.csv \
+    --data_test_split 140 --data_train_splits 0.189 0.625 0.188 \
     --train_epochs 10  \
     --basemodel 'ETS' \
     --basemodel 'AutoSARIMA' \
