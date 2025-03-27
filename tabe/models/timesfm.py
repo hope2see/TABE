@@ -52,13 +52,12 @@ class TimesFM(AbstractModel):
 
     def proceed_onestep(self, batch_x, batch_y, batch_x_mark, batch_y_mark, training: bool = False):
         assert batch_x.shape[0]==1 and batch_y.shape[0]==1
+        assert batch_x.shape[1] <= self.MAX_CONTEXT_LEN, f'Exceeded TimesFM\'s Max context length!'
 
         # Given: batch_x.shape = (batch_len=1, seq_len, feature_dim)
-        # TimesFM expect:
-        #   'inputs' shape: (feature_dim, seq_len)
-        # So, reshape batch_x to (feature_dim, seq_len)
-        batch_x = batch_x[0].T
-        assert batch_x.shape[1] <= self.MAX_CONTEXT_LEN, f'Exceeded TimesFM\'s Max context length!'
+
+        # Reshape batch_x from (batch_len, seq_len, feature_dim) to (batch_len, seq_len)
+        batch_x = batch_x[:, :, -1] # target feature only
 
         #   def forecast(
         #       self,
@@ -94,9 +93,9 @@ class TimesFM(AbstractModel):
         point_forecast, quantile_forecast = self.model.forecast(
             # batch_x.to(self.device).to(self.model.dtype),
             batch_x,
-            forecast_context_len = batch_x.shape[1],
+            forecast_context_len = batch_x.shape[1]
         )
-        y_hat = point_forecast[-1][0]
+        y_hat = point_forecast[0][0]
 
         # calculate the actuall loss of next timestep
         y = batch_y[0, -1:, -1] 

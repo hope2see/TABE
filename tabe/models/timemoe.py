@@ -57,21 +57,33 @@ class TimeMoE(AbstractModel):
 
     def proceed_onestep(self, batch_x, batch_y, batch_x_mark, batch_y_mark, training: bool = False):
         assert batch_x.shape[0]==1 and batch_y.shape[0]==1
-
-        # Given: batch_x.shape = (batch_len=1, seq_len, feature_dim)
-        # TimeMoE expect:
-        #   'inputs': np.array(window_seq[: self.context_length], dtype=np.float32),
-        #   'labels': np.array(window_seq[-self.prediction_length:], dtype=np.float32),
-        # So, reshape batch_x to (feature_dim, seq_len)
-        batch_x = batch_x[0].T
-
         assert batch_x.shape[1] <= self.MAX_CONTEXT_LEN, f'Exceeded TimeMoE\'s Max context length!'
+
+        # Shapes of given parameters
+        #   : batch_x, batch_x_mark  = (batch_len=1, seq_len, feature_dim)
+        #   : batch_y, batch_y_mark  = (batch_len=1, seq_len + pred_len, feature_dim)
+        # TimeMoE expects inputs with the shape below (from source of TimeMoeModel clsss).
+        #   : input_ids is the input of time series, its shape is [batch_size, seq_len, 'input_size']
+        #  However, actually it does not support 'input_size' (feature dimension) in 
+        #   timemoe.model.ts_generation_mixin.TSGenerationMixin._greedy_search(), which expects 
+        #   input_ids.shape = [batch_size, cur_len]
+        #  It means that TimeMoE supports only single variate forecasting, yet. 
+
+        # Also, Note the comment in transformers.generation.utils.GenerationMixin.generate()
+        # inputs (`torch.Tensor` of varying shape depending on the modality, *optional*):
+        #     The sequence used as a prompt for the generation or as model inputs to the encoder. If `None` the
+        #     method initializes it with `bos_token_id` and a batch size of 1. For decoder-only models `inputs`
+        #     should be in the format of `input_ids`. For encoder-decoder models *inputs* can represent any of
+        #     `input_ids`, `input_values`, `input_features`, or `pixel_values`.
+
+        # Reshape batch_x from (batch_len, seq_len, feature_dim) to (batch_len, seq_len)
+        batch_x = batch_x[:, :, -1] # target feature only
         
         outputs = self.model.generate(
             inputs=batch_x.to(self.device).to(self.model.dtype),
             max_new_tokens=1, # prediction_length
         )
-        y_hat = outputs[-1, -1].item()
+        y_hat = outputs[0, -1].item()
 
         # calculate the actuall loss of next timestep
         y = batch_y[0, -1:, -1] 

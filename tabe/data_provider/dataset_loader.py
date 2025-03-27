@@ -25,7 +25,7 @@ data_dict = {
     # 'UEA': UEAloader,
     'TABE_FILE': Dataset_TABE_File,
     'TABE_ONLINE': Dataset_TABE_Online,
-    'TABE_Live': Dataset_TABE_Live,
+    'TABE_LIVE': Dataset_TABE_Live,
 }
 
 
@@ -72,7 +72,7 @@ def _data_provider(configs, flag, step_by_step=False, df_raw=None):
             data_set = Data(configs, 
                 [configs.seq_len, configs.label_len, configs.pred_len],
                 flag, timeenc)            
-        elif configs.data == 'TABE_Live':
+        elif configs.data == 'TABE_LIVE':
             data_set = Data(configs, 
                 [configs.seq_len, configs.label_len, configs.pred_len],
                 flag, timeenc, df_raw)   

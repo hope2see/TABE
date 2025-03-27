@@ -325,11 +325,6 @@ class TSLibModel(AbstractModel):
         return total_loss
 
 
-    # NOTE
-    # 'vali_data' is just used for evaluating the loss of the trained parameters.
-    # So, test() can be called without 'vali_data' being used for train the model. 
-    # Given the fact that test_data is actually those data that comes after vali_data, 
-    # is it okay to exclude vali_data for training the model?
     def test(self, load_saved_model=False):
         if load_saved_model:
             self.load_saved_model()

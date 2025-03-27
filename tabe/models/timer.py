@@ -38,16 +38,11 @@ class Timer(AbstractModel):
 
     def proceed_onestep(self, batch_x, batch_y, batch_x_mark, batch_y_mark, training: bool = False):
         assert batch_x.shape[0]==1 and batch_y.shape[0]==1
-
-        # Given: batch_x.shape = (batch_len=1, seq_len, feature_dim)
-        # AutoModelForCausalLM expect:
-        #   'inputs': np.array(window_seq[: self.context_length], dtype=np.float32),
-        #   'labels': np.array(window_seq[-self.prediction_length:], dtype=np.float32),
-        # So, reshape batch_x to (feature_dim, seq_len)
-        batch_x = batch_x[0].T
-
         assert batch_x.shape[1] <= self.MAX_CONTEXT_LEN, f'Exceeded TimeMoE\'s Max context length!'
-        
+
+        # Reshape batch_x from (batch_len, seq_len, feature_dim) to (batch_len, seq_len)
+        batch_x = batch_x[:, :, -1] # target feature only
+
         # NOTE 
         # input_token_len of default (or pretrained) config of Timer model is set to be 96 !! 
         # Input length must be at least Timer's config.input_token_len
@@ -55,7 +50,7 @@ class Timer(AbstractModel):
             inputs=batch_x.to(self.device).to(self.model.dtype),
             max_new_tokens=1, # prediction_length
         )
-        y_hat = outputs[-1, -1].item()
+        y_hat = outputs[0, -1].item()
 
         # calculate the actuall loss of next timestep
         y = batch_y[0, -1:, -1] 

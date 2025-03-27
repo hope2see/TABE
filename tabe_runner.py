@@ -83,7 +83,7 @@ def _get_parser(model_name=None):
         parser.add_argument('--data_path', type=str, default='BTC-USD_LogRet_2021-01-01_2023-01-01_1d.csv', help='data file')
         parser.add_argument('--features', type=str, default='MS',
                             help='forecasting task, options:[M, S, MS]; M:multichannel predict multichannel, S:unichannel predict unichannel, MS:multichannel predict unichannel')
-        parser.add_argument('--target', type=str, default='OT', help='target feature in S or MS task')
+        parser.add_argument('--target', type=str, default='LogRet1', help='target feature in S or MS task [LogRet1]')
         parser.add_argument('--checkpoints', type=str, default='./checkpoints/', help='location of model checkpoints')
         parser.add_argument('--data_asset', type=str, default='BTC-USD', help='ticker of asset')
         parser.add_argument('--data_start_date', type=str, default='2021-01-01', help='start date for the data to download. Used for TABE_ONLINE data')
@@ -92,8 +92,6 @@ def _get_parser(model_name=None):
         parser.add_argument('--freq', type=str, default='d', 
                             help='freq for time features encoding, options:[s:secondly, t:minutely, h:hourly, d:daily, b:business days, w:weekly, m:monthly], you can also use more detailed freq like 15min or 3h')
         parser.add_argument('--data_interval', type=str, default='1d', help='interval parameter for downloading')
-        parser.add_argument('--target_datatype', type=str, default='LogRet',
-                            help='value type of target data :[Unknown, Price, Ret, LogRet]')
         parser.add_argument('--data_test_split', type=str, default='0.3', help='ratio (0.3), or length (100), or start_date (\'2020-01-01\') of the test_period')
         parser.add_argument('--data_train_splits', type=float, nargs='+', default=[0.3, 0.6, 0.1], 
                             help='[val, base_train, ensemble_train] ratios for the period before test period')
@@ -378,20 +376,17 @@ def _report_results(configs, result_dir, y, y_hat_adj, y_hat_cbm=None, y_hat_bsm
 
     # Trading Simulations ---------------
 
-    target_datatype = configs.target_datatype
-    if target_datatype in ['Ret', 'LogRet']:
-        if target_datatype == 'LogRet':
-            # Convert data to 'Ret'
-            y = np.exp(y) - 1
-            y_hat_adj = np.exp(y_hat_adj) - 1
-            # y_hat_q_low = np.exp(y_hat_q_low) - 1
-            if y_hat_cbm is not None:
-                y_hat_cbm = np.exp(y_hat_cbm) - 1
-            if y_hat_bsm is not None:
-                for i in range(len(y_hat_bsm)):
-                    y_hat_bsm[i] = np.exp(y_hat_bsm[i]) - 1
-        else: # if target_datatype == 'Ret':
-            pass # nothing to do
+    target = configs.target
+    if target in ['LogRet1',]:
+        # Convert data to 'Ret'
+        y = np.exp(y) - 1
+        y_hat_adj = np.exp(y_hat_adj) - 1
+        # y_hat_q_low = np.exp(y_hat_q_low) - 1
+        if y_hat_cbm is not None:
+            y_hat_cbm = np.exp(y_hat_cbm) - 1
+        if y_hat_bsm is not None:
+            for i in range(len(y_hat_bsm)):
+                y_hat_bsm[i] = np.exp(y_hat_bsm[i]) - 1
 
         # Simulation with 'Ret'
         # for apply_threshold_prob in [False, True]:
@@ -412,7 +407,7 @@ def _report_results(configs, result_dir, y, y_hat_adj, y_hat_cbm=None, y_hat_bsm
                                                  strategy+'_prob' if apply_threshold_prob else strategy, 
                                                  len(y))
     else:
-        logger.warning(f"Trading simulation for target type {target_datatype} is not supported now.")
+        logger.warning(f"Trading simulation for target {target} is not supported now.")
 
 
 def _cleanup_gpu_cache(configs):

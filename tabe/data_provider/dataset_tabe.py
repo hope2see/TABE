@@ -18,16 +18,17 @@ warnings.filterwarnings('ignore')
 
 _default_feature_config = {
     # feature name : parameter(s)
-    # 'Close' : (0),  # 'Close' price
-    'LogRet' : ('Close', (1, 3, 5, 7)), # log return (col, spans)
-    'SMA' : ('LogRet1', (3, 5, 7)), # SMA (col, spans)
-    'EMA' : ('LogRet1', (3, 5, 7), False), # EMA (col, spans, adjust)
-    'MACD' : ('LogRet1', 12, 26, False), # MACD (col, short_span, long_span, adjust)
-    'MACD_Signal' : ('LogRet1', 9, False), # MACD_Signal (col, span, adjust)
-    'RSI' : ('Close', 14, False), # RSI (col, spans, adjust)    
-    'ETS' : ('LogRet1', 20, 'add', True), # ETS (col, lookback_win, trend, damped_trend)
-    'SARIMA' : ('LogRet1', 20, 'ct', False), # ETS (col, lookback_win, trend, enforce_stationarity)
-    # 'target' : ('LogRet', 1) # LogRet 1 interval ahead 
+    'LogRet' : ('Close', (1,)), # log return (col, spans)
+    # 'ETS' : ('LogRet1', 20, 'add', True), # ETS (col, lookback_win, trend, damped_trend)
+    # 'SARIMA' : ('LogRet1', 20, 'ct', False), # ETS (col, lookback_win, trend, enforce_stationarity)
+    # 'LogRet' : ('Close', (1, 3, 5, 7)), # log return (col, spans)
+    # 'SMA' : ('LogRet1', (3, 5, 7)), # SMA (col, spans)
+    # 'EMA' : ('LogRet1', (3, 5, 7), False), # EMA (col, spans, adjust)
+    # 'MACD' : ('LogRet1', 12, 26, False), # MACD (col, short_span, long_span, adjust)
+    # 'MACD_Signal' : ('LogRet1', 9, False), # MACD_Signal (col, span, adjust)
+    # 'RSI' : ('Close', 14, False), # RSI (col, spans, adjust)    
+    # 'ETS' : ('LogRet1', 20, 'add', True), # ETS (col, lookback_win, trend, damped_trend)
+    # 'SARIMA' : ('LogRet1', 20, 'ct', False), # ETS (col, lookback_win, trend, enforce_stationarity)
 }
 
 
@@ -72,11 +73,13 @@ def gen_rsi(df_data, col, span, adjust):
 def gen_ets(df_data, col, lookback_win, trend, damped_trend, steps=1):
     endog = df_data[col].values
     pred = np.empty(len(df_data))
+    # The data at the current time (data at index 't') should be included in lookback window 
+    # So, lookback_win = [t+1-lookback_win : t+1]
     for t in range(len(df_data)):
-        if t < lookback_win:
+        if t+1 < lookback_win:
             pred[t] = np.nan
         else:
-            pred[t] = ExponentialSmoothing(endog[t-lookback_win:t], trend=trend, 
+            pred[t] = ExponentialSmoothing(endog[t+1-lookback_win : t+1], trend=trend, 
                                            damped_trend=damped_trend).fit().forecast(steps=steps)
     df_data['ETS'] = pred
     
@@ -84,12 +87,14 @@ def gen_ets(df_data, col, lookback_win, trend, damped_trend, steps=1):
 def gen_sarima(df_data, col, lookback_win, trend, enforce_stationarity, steps=1):
     endog = df_data[col].values
     pred = np.empty(len(df_data))
+    # The data at the current time (data at index 't') should be included in lookback window 
+    # So, lookback_win = [t+1-lookback_win : t+1]
     for t in range(len(df_data)):
-        if t < lookback_win:
+        if t+1 < lookback_win:
             pred[t] = np.nan
         else:
             # FIX ME! to AutoSarima
-            pred[t] = SARIMAX(endog[t-lookback_win:t], order=(1,1,0), trend=trend, 
+            pred[t] = SARIMAX(endog[t+1-lookback_win : t+1], order=(1,1,0), trend=trend, 
                               enforce_stationarity=enforce_stationarity).fit(disp=False).forecast(steps=steps)
     df_data['SARIMA'] = pred
 
@@ -122,10 +127,6 @@ def _populate_features(config, feature_config, df, copy=False):
     for key, val in feature_config.items():
         _feature_fn[key](df, *val)
 
-    if config.target_datatype == 'LogRet':
-        df['OT'] = df['LogRet1'].shift(-1)  
-    else:
-        assert False, f"Unsupported target_datatype : {config.target_datatype}"
     df = df.dropna()
     df.reset_index(inplace=True)
     return df
@@ -279,10 +280,10 @@ class Dataset_TABE_Base(Dataset):
         train_splits = self.config.data_train_splits
 
         if test_split_type == 'Date':
-            assert df_data['Date'].values[0] < self.test_split < df_data['Date'].values[-1]
-            num_test = len(df_data[df_data['Date'] >= self.test_split])
+            assert df_data['Date'].values[0] < test_split < df_data['Date'].values[-1]
+            num_test = len(df_data[df_data['Date'] >= test_split])
         elif test_split_type == 'ratio':
-            num_test = int(len(df_data) * self.test_split)
+            num_test = int(len(df_data) * test_split)
         else: # length
             num_test = test_split
 
@@ -404,7 +405,7 @@ class Dataset_TABE_File(Dataset_TABE_Base):
 class Dataset_TABE_Online(Dataset_TABE_File):
     def __init__(self, config, size, flag, timeenc, feature_config=_default_feature_config):        
         
-        data_path = config.data_asset  + '_' + config.target_datatype + '_' \
+        data_path = config.data_asset  + '_' + config.target + '_' \
             + config.data_start_date + '_' + config.data_end_date + '_' + config.data_interval + '.csv'
         full_path = config.root_path + '/' + data_path
 

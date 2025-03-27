@@ -41,7 +41,7 @@ class TabeModel(AbstractModel):
         self.scaler_y_m = StandardScaler() 
 
         if self.configs.is_training:
-            assert self.configs.data != 'TABE_Live'
+            assert self.configs.data != 'TABE_LIVE'
             self.combiner_model.train_basemodels()
  
 

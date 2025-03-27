@@ -119,14 +119,16 @@ def print_configs(configs):
 
     logger.info("\033[1m" + f"Data {configs.data:<20}" + "\033[0m")
     train_splits = ', '.join(map(str, configs.data_train_splits))   
-    logger.info(f'  {"Split [val | train | ensemble_train]: ":<20}{train_splits:<20}{"Test: ":<20}{configs.data_test_split:<20}')
-    logger.info(f'  {"Features:":<20}{configs.features:<20}{"Target Column:":<20}{configs.target:<20}')
-    logger.info(f'  {"Target datatype:":<20}{configs.target_datatype:<20}{"Target Freq:":<20}{configs.freq:<20}')
-    if configs.data == 'TABE_ONLINE':
+    logger.info(f'  {"Test: ":<20}{configs.data_test_split:<20}{"Train [val|train|ensemble_train]: ":<20}{train_splits:<20}')
+    logger.info(f'  {"Features:":<20}{configs.features:<20}{"Target_Col:":<20}{configs.target:<20}')
+    logger.info(f'  {"Target Freq:":<20}{configs.freq:<20}')
+    if configs.data == 'TABE_FILE':
+        logger.info(f'  {"Root Path:":<20}{configs.root_path:<20}{"Data Path:":<20}{configs.data_path:<20}')
+    elif configs.data == 'TABE_ONLINE' or configs.data == 'TABE_LIVE':
         logger.info(f'  {"Asset:":<20}{configs.data_asset:<20}{"interval:":<20}{configs.data_interval:<20}')
         logger.info(f'  {"start_date:":<20}{configs.data_start_date:<20}{"end_date:":<20}{configs.data_end_date:<20}')
     else:
-        logger.info(f'  {"Root Path:":<20}{configs.root_path:<20}{"Data Path:":<20}{configs.data_path:<20}')
+        assert False, 'Not supported data : ' + configs.data
     logger.info('')
 
     logger.info(f"\033[1m" + f"HPO Policy = {configs.hpo_policy}" + "\033[0m")
