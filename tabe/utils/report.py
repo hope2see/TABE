@@ -72,7 +72,7 @@ def plot_forecast_result(truth, pred,  adj_pred_q_low=None, adj_pred_q_high=None
     plt.ylabel('Target')
     plt.xlabel('Test Duration (Days)')
     plt.plot(truth, label='GroundTruth', linewidth=1.5, color='black')
-    plt.plot(pred, label="Adjuster Model", linewidth=1.5, color='red')
+    plt.plot(pred, label="Tabe Model", linewidth=1.5, color='red')
     if adj_pred_q_low is not None:
         plt.fill_between(
             np.linspace(0, len(truth)-1, len(truth)), 
@@ -156,7 +156,7 @@ def _measure_loss(p,t):
 
 def report_losses(y, y_hat, y_hat_cbm=None, y_hat_bsm=None, basemodels=None):
     df = pd.DataFrame()
-    df['Adjuster'] = _measure_loss(y_hat, y)
+    df['Tabe'] = _measure_loss(y_hat, y)
     if y_hat_cbm is not None:
         df['Combiner'] = _measure_loss(y_hat_cbm, y)
     if y_hat_bsm is not None:
@@ -188,7 +188,7 @@ def report_classifier_performance(y, y_hat, y_hat_cbm=None, y_hat_bsm=None, base
     # for cl_method in ['up_down', 'up_down_sideway']:
     for cl_method in ['up_down']:
         df = pd.DataFrame() 
-        df['Adjuster'] = _measure_classifier_performance(y, y_hat, cl_method)
+        df['Tabe'] = _measure_classifier_performance(y, y_hat, cl_method)
         if y_hat_cbm is not None:
             df['Combiner'] = _measure_classifier_performance(y, y_hat_cbm, cl_method)
         if y_hat_bsm is not None:

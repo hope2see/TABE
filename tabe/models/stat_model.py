@@ -1,0 +1,103 @@
+
+import os
+import numpy as np
+import random
+import torch
+import time
+import warnings
+import numpy as np
+
+from utils.metrics import metric
+
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+import pmdarima as pm
+
+from tabe.utils.logger import logger
+from tabe.utils.misc_util import OptimTracker
+from tabe.data_provider.dataset_loader import get_data_provider
+from tabe.models.abstractmodel import AbstractModel
+
+
+warnings.filterwarnings('ignore')
+
+
+# NOTE 
+# Statistical models (ETS, and SARIMA) are available only for univariate forecasting,
+# So, they are fitted only using the target variable.
+class StatisticalModel(AbstractModel):
+    def __init__(self, configs, device, name):
+        super().__init__(configs, device, name) 
+
+    def _fit(self, endog):
+        raise NotImplementedError
+
+    # Statistical Models do not need to be trained, 
+    # since they can fit with the 'seq_len' number of data points when prediction is needed.
+    def train(self):
+        pass
+
+    def load_saved_model(self):
+        pass
+
+    def _forward_onestep(self, batch_x, batch_y, batch_x_mark, batch_y_mark):
+        assert self.configs.label_len == 1  
+        # batch_x.shape=(B,S,F) B(Batch Size)=1, S(Sequence Length), F(Feature Dimension)
+        endog = batch_x[0, :, -1].numpy()
+        pred = self._fit(endog).forecast(steps=1)
+        return pred[0]
+
+    # def proceed_onestep(self, batch_x, batch_y, batch_x_mark, batch_y_mark, training: bool = False):
+    #     assert batch_x.shape[0]==1 and batch_y.shape[0]==1
+    #     endog = batch_y[0, :self.configs.seq_len, -1] # shape=(B,S+1,F) B(Batch Size)=1, S(Sequence Length)+1, F(Feature Dimension)
+    #     endog = endog.numpy()
+    #     pred = self._fit(endog).forecast(steps=1)
+    #     truth = batch_y[0, -1, -1] 
+    #     loss = self.criterion(torch.tensor(pred), truth).item()
+    #     return pred[0], loss
+    
+
+class EtsModel(StatisticalModel):
+    def __init__(self, configs, device=None, name="ETS"):
+        super().__init__(configs, device, name) 
+
+    def _fit(self, endog):
+        # NOTE: Use auto-finding of the hyperparameters for ETS
+        return ExponentialSmoothing(endog, trend='add', damped_trend=True).fit()
+
+
+class SarimaModel(StatisticalModel):
+    def __init__(self, configs, device=None, name="SARIMA"):
+        super().__init__(configs, device, name) 
+
+    def _fit(self, endog):
+        # NOTE: Use auto-finding of the hyperparameters for SARIMA
+        return SARIMAX(endog, order=(1,1,0), trend='ct', enforce_stationarity=False).fit(disp=False)
+
+
+class AutoSarimaModel(StatisticalModel):
+    def __init__(self, configs, device=None, name="AutoSARIMA"):
+        super().__init__(configs, device, name) 
+
+    def _fit(self, endog):
+        self.model = pm.auto_arima(
+            endog,                 # training series
+            start_p=1, #start_q=1,  # initial range for p and q
+            # max_p=3, max_q=3,      # upper bounds for p and q
+            # start_P=0, start_Q=0,  # initial range for P and Q
+            # max_P=2, max_Q=2,      # upper bounds for seasonal P and Q
+            seasonal=False,         # enable SARIMA
+            # m=12,                  # seasonal period (e.g. 12 for monthly data with yearly seasonality)
+            # d=None,                # let auto_arima find non-seasonal differencing
+            # D=None,                # let auto_arima find seasonal differencing
+            trace=False,            # print output of model selection
+            error_action='warn',
+            suppress_warnings=True,
+            # stepwise=True          # more efficient, stepwise approach
+        )
+        return self
+    
+    def forecast(self, steps=1):
+        return self.model.predict(n_periods=steps)
+
+

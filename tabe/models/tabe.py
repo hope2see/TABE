@@ -12,6 +12,7 @@ from scipy.stats import norm
 from sklearn.preprocessing import StandardScaler
 
 from tabe.data_provider.dataset_loader import get_data_provider
+from tabe.data_provider.dataset_tabe import Dataset_TABE_Live
 from tabe.models.abstractmodel import AbstractModel
 from tabe.models.timemoe import TimeMoE
 from tabe.utils.mem_util import MemUtil
@@ -25,13 +26,10 @@ _mem_util = MemUtil(rss_mem=False, python_mem=False)
 
 class TabeModel(AbstractModel):
 
-    def __init__(self, configs, combiner_model, adjuster_model=None):
-        super().__init__(configs, "Tabe")
-        self.combiner_model = combiner_model # must've been trained already
-        self.adjuster_model = adjuster_model # Model used to adjust. TimeMoE
-        self.y_hat = None
-        self.truths = None # the last 'y' values. shape = (HPO_EVALUATION_PEROID)
-        self.test_set = None
+    def __init__(self, configs, device, combiner_model, adjuster_model=None):
+        super().__init__(configs, device, "Tabe")
+        self.combiner = combiner_model # must've been trained already
+        self.adjuster = adjuster_model # Model used to adjust. TimeMoE
 
         # scalers used to normalize the training data while performing test (proceed_onestep)
         self.use_scaler = configs.use_batch_norm 
@@ -40,173 +38,77 @@ class TabeModel(AbstractModel):
         self.scaler_x_m = StandardScaler() 
         self.scaler_y_m = StandardScaler() 
 
-        if self.configs.is_training:
-            assert self.configs.data != 'TABE_LIVE'
-            self.combiner_model.train_basemodels()
- 
+    def prepare_result_storage(self, total_steps=None):
+        super().prepare_result_storage(total_steps)
+        self.combiner.prepare_result_storage(total_steps)
 
-    def train(self, train_dataset=None, train_loader=None):
-        if train_dataset is None :
-            train_dataset, train_loader = get_data_provider(self.configs, flag='ensemble_train', step_by_step=True)
-        
-        self.combiner_model.train(train_dataset, train_loader)
+    def train(self, esb_train_dataset=None, esm_train_loader=None):
+        self.combiner.train()
 
-        y = train_dataset.data_y[self.configs.seq_len:, -1] # the next timestep truth [-1] is excluded
-        assert len(y) == len(train_loader)
+        if esb_train_dataset is None :
+            esb_train_dataset, esm_train_loader = get_data_provider(self.configs, flag='ensemble_train', step_by_step=True)
 
-        y_hat_cbm = np.empty_like(y)
-        for t, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(train_loader):
-            y_hat_t, _ = self.combiner_model.proceed_onestep(
-                batch_x, batch_y, batch_x_mark, batch_y_mark)
-            y_hat_cbm[t] = y_hat_t
-            # _mem_util.print_memory_usage()
+        self.combiner.prepare_result_storage(len(esb_train_dataset)) 
 
-        if self.adjuster_model is None:
-            y_hat = y_hat_cbm
-        else:
-            y_hat = self.adjuster_model.train(y, y_hat_cbm)
+        for t, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(esm_train_loader):
+            self.combiner.proceed_onestep(batch_x, batch_y, batch_x_mark, batch_y_mark)
 
-        self.truths = y
-        self.y_hat = y_hat
-        self.y_hat_cbm = y_hat_cbm
+        truths = esb_train_dataset.data_y[-len(esb_train_dataset):, -1] 
+        cbm_preds = self.combiner.predictions
+
+        if self.adjuster is not None:
+            self.adjuster.train(truths, cbm_preds)
 
 
-    def _normalize_batch(self, batch_list, inverse=False):
-        scaler_list = [self.scaler_x, self.scaler_y, self.scaler_x_m, self.scaler_y_m]
-        for i, batch in enumerate(batch_list):
-            scaler = scaler_list[i]
-            batch_np = batch.squeeze(0).numpy() # batch.shape = (1, seq_len, feature_dim)
-            if not inverse:
-                scaled_batch_np = scaler.fit_transform(batch_np) 
-            else:
-                scaled_batch_np = scaler.inverse_transform(batch_np) 
-            batch_list[i] = torch.from_numpy(scaled_batch_np).unsqueeze(0)
-        return batch_list
+    # def _normalize_batch(self, batch_list, inverse=False):
+    #     scaler_list = [self.scaler_x, self.scaler_y, self.scaler_x_m, self.scaler_y_m]
+    #     for i, batch in enumerate(batch_list):
+    #         scaler = scaler_list[i]
+    #         batch_np = batch.squeeze(0).numpy() # batch.shape = (1, seq_len, feature_dim)
+    #         if not inverse:
+    #             scaled_batch_np = scaler.fit_transform(batch_np) 
+    #         else:
+    #             scaled_batch_np = scaler.inverse_transform(batch_np) 
+    #         batch_list[i] = torch.from_numpy(scaled_batch_np).unsqueeze(0)
+    #     return batch_list
 
 
-    def proceed_onestep(self, batch_x, batch_y, batch_x_mark, batch_y_mark, training: bool = False):
-        assert batch_x.shape[0]==1 and batch_y.shape[0]==1
+    def _forward_onestep(self, batch_x, batch_y, batch_x_mark, batch_y_mark):
+        # truth (target value) for the previous timestep
+        truth = batch_y[0, -1, -1] 
 
-        # truth at the next timestep
-        y = batch_y[0, -1, -1] 
-
-        if self.use_scaler:
-            batch_x, batch_y, batch_x_mark, batch_y_mark = \
-                self._normalize_batch([batch_x, batch_y, batch_x_mark, batch_y_mark], inverse=False)
+        # if self.use_scaler:
+        #     batch_x, batch_y, batch_x_mark, batch_y_mark = \
+        #         self._normalize_batch([batch_x, batch_y, batch_x_mark, batch_y_mark], inverse=False)
             
-        # get combiner model's predition
-        y_hat_cbm, y_hat_bsm = self.combiner_model.proceed_onestep(
-            batch_x, batch_y, batch_x_mark, batch_y_mark, training)                
+        cbm_pred, _ = self.combiner.proceed_onestep(
+            batch_x, batch_y, batch_x_mark, batch_y_mark)
 
-        if self.use_scaler:
-            batch_x, batch_y, batch_x_mark, batch_y_mark = \
-                self._normalize_batch([batch_x, batch_y, batch_x_mark, batch_y_mark], inverse=True)
+        # if self.use_scaler:
+        #     batch_x, batch_y, batch_x_mark, batch_y_mark = \
+        #         self._normalize_batch([batch_x, batch_y, batch_x_mark, batch_y_mark], inverse=True)
 
-        if self.adjuster_model is None:
-            y_hat_adj = y_hat_cbm
+        if self.adjuster is None:
+            pred = cbm_pred
         else:
-            # get next prediction of Adjuster 
-            y_hat_adj = self.adjuster_model.proceed_onestep(y, y_hat_cbm, training)
-
-        y_hat_tabe = y_hat_adj  
-
-        self.y_hat_cbm = np.concatenate((self.y_hat_cbm, np.array([y_hat_cbm])))
-        self.y_hat = np.concatenate((self.y_hat, np.array([y_hat_tabe])))
-        self.truths = np.concatenate((self.truths, np.array([y])))
+            pred = self.adjuster.adjust_onestep(truth, cbm_pred)
 
         # logger.info(f'Adj.predict : final_pred={final_pred:.5f}, y_hat={y_hat:.5f}, y_hat_cbm={y_hat_cbm:.5f}')
-        return y_hat_tabe, y_hat_adj, y_hat_cbm, y_hat_bsm
-
-
-    # def forecast_onestep(self, batch_x, batch_y, batch_x_mark, batch_y_mark, invert=True):
-    def forecast_onestep(self, test_set, df_new_data):
-        batch_x, batch_y, batch_x_mark, batch_y_mark, = test_set.feed_data(df_new_data)
-        truth = batch_y[-1, -1]
-
-        batch_x = torch.tensor(batch_x).unsqueeze(0)
-        batch_y = torch.tensor(batch_y).unsqueeze(0)
-        batch_x_mark = torch.tensor(batch_x_mark).unsqueeze(0)
-        batch_y_mark = torch.tensor(batch_y_mark).unsqueeze(0)
-        fcst, _, _, _ = \
-            self.proceed_onestep(batch_x, batch_y, batch_x_mark, batch_y_mark, training=True)            
-
-        if test_set.scale:
-            data_tf = np.zeros((1, test_set.data_y.shape[1]))
-            data_tf[:, -1] = fcst
-            fcst = test_set.inverse_transform(data_tf)[0, -1]
-            data_tf[:, -1] = truth
-            truth = test_set.inverse_transform(data_tf)[0, -1]
-
-        return truth, fcst, None, None
-
-
-    # def forecast_onestep(self, invert=True):
-    #     if self.test_set is None:
-    #         self.test_set, _ = get_data_provider(self.configs, flag='test', step_by_step=True)
-    #         self.y = self.test_set.data_y[self.configs.seq_len:, -1]
-    #         self.need_to_invert_data = True if (self.test_set.scale and self.configs.inverse) else False
-    #         self.tabe_pred = np.empty_like(self.y)
-    #         self.cur_t = 0
-
-    #     t = self.cur_t
-    #     if t < len(self.y):
-    #         batch_x, batch_y, batch_x_mark, batch_y_mark = self.test_set[t]
-    #         batch_x = torch.tensor(batch_x).unsqueeze(0)
-    #         batch_y = torch.tensor(batch_y).unsqueeze(0)
-    #         batch_x_mark = torch.tensor(batch_x_mark).unsqueeze(0)
-    #         batch_y_mark = torch.tensor(batch_y_mark).unsqueeze(0)
-    #         fcst, _, _, _ = \
-    #             self.proceed_onestep(batch_x, batch_y, batch_x_mark, batch_y_mark, training=True)            
-
-    #         truth = self.y[t]
-    #         if self.need_to_invert_data:
-    #             data_tf = np.zeros((1, self.test_set.data_y.shape[1]))
-    #             data_tf[:, -1] = fcst
-    #             fcst = self.test_set.inverse_transform(data_tf)[0, -1]
-    #             data_tf[:, -1] = truth
-    #             truth = self.test_set.inverse_transform(data_tf)[0, -1]
-
-    #         self.tabe_pred[t] = fcst
-    #         self.cur_t += 1
-    #         return truth, fcst, self.test_set.df_raw.at[t,'date'], self.test_set.df_raw.at[t,'Close']
-    #     else:
-    #         return None, None, None, None
-
-
-    # def test_step_by_step(self):
-    #     fcsts = []
-    #     while True:
-    #         truth, fcst, date, price = self.forecast_onestep()
-    #         if truth is None:
-    #             logger.info("Test finished.")   
-    #             break
-    #         else:
-    #             logger.info(f"{date} price={price:.1f}, Truth={truth:.5f}, Forecast={fcst:.5f}")
-    #             fcsts.append(fcst)
-
-    #     return self.y, np.array(fcsts)
+        return pred
 
 
     def test(self):
-        test_set, test_loader = get_data_provider(self.configs, flag='test', step_by_step=True)
-        y = test_set.data_y[self.configs.seq_len:, -1]
-        need_to_invert_data = True if (test_set.scale and self.configs.inverse) else False
+        assert self.configs.data != 'TABE_LIVE', 'tabe.test() is not intended to be used for TABE_LIVE data.'
 
-        tabe_pred = np.empty_like(y)
-        y_hat_adj = np.empty_like(y)
-        y_hat_cbm = np.empty_like(y)
-        y_hat_bsm = np.empty((len(self.combiner_model.basemodels), len(y)))
-        y_hat_q_low = np.empty_like(y)
-        y_hat_q_high = np.empty_like(y)
-        devi_stddev = np.empty_like(y)
+        test_set, test_loader = get_data_provider(self.configs, flag='test', step_by_step=True)
+
+        self.prepare_result_storage(len(test_set)) 
 
         for t, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(test_loader):
-            tabe_pred[t], y_hat_adj[t], y_hat_cbm[t], y_hat_bsm[:,t] = \
-                self.proceed_onestep(batch_x, batch_y, batch_x_mark, batch_y_mark, training=True)            
-            _mem_util.print_memory_usage()
+            self.proceed_onestep(batch_x, batch_y, batch_x_mark, batch_y_mark)
 
-        # if self.use_gpm:
-        #     report.plot_gpmodel(self.gpm, filepath=self._get_result_path()+"/gpmodel_analysis.pdf")
+        # 'self.dataset' is used when result reporting 
+        self.dataset = test_set
 
         # TODO : check if dev_stddev is correctly used? 
         # z_val = norm.ppf(self.configs.quantile) 
@@ -217,30 +119,42 @@ class TabeModel(AbstractModel):
         # z_val = norm.ppf(self.configs.buy_threshold_prob) 
         # buy_threshold_q = y_hat - devi_stddev * z_val
 
-        if need_to_invert_data:
-            n_features = test_set.data_y.shape[1]
-            data_y = np.zeros((len(y), n_features))
-            data_final_pred = np.zeros((len(y), n_features))
-            # data_y_hat_q_low = np.zeros((len(y), n_features))
-            # data_y_hat_q_high = np.zeros((len(y), n_features))
-            data_buy_threshold_q = np.zeros((len(y), n_features))
-            data_y_hat_cbm = np.zeros((len(y), n_features))
-            data_y[:, -1] = y
-            data_final_pred[:, -1] = tabe_pred
-            # data_y_hat_q_low[:, -1] = y_hat_q_low
-            # data_y_hat_q_high[:, -1] = y_hat_q_high
-            # data_buy_threshold_q[:, -1] = buy_threshold_q
-            data_y_hat_cbm[:, -1] = y_hat_cbm
-            y = test_set.inverse_transform(data_y)[:, -1]
-            tabe_pred = test_set.inverse_transform(data_final_pred)[:, -1]
-            # y_hat_q_low = test_set.inverse_transform(data_y_hat_q_low)[:, -1]
-            # y_hat_q_high = test_set.inverse_transform(data_y_hat_q_high)[:, -1]
-            # buy_threshold_q = test_set.inverse_transform(data_buy_threshold_q)[:, -1]
-            y_hat_cbm = test_set.inverse_transform(data_y_hat_cbm)[:, -1]
-            for i in range(len(y_hat_bsm)):
-                data_y_hat_bsm = np.zeros((len(y), n_features))
-                data_y_hat_bsm[:, -1] = y_hat_bsm[i]
-                y_hat_bsm[i] = test_set.inverse_transform(data_y_hat_bsm)[:, -1]
 
-        # return y, tabe_pred, y_hat_cbm, y_hat_bsm, y_hat_q_low, y_hat_q_high, buy_threshold_q, devi_stddev
-        return y, tabe_pred, y_hat_cbm, y_hat_bsm, y_hat_q_low, y_hat_q_high, None, devi_stddev
+    #===========================================================================
+    # Interface for training/testing with 'live' data (fed on-the-fly)
+
+    def forecast_onestep(self, df_new_data):
+        """
+        Intended to be used only for 'test' dataset of 'Live' data.
+        """
+        # assert self.live_dataset.isinstance(Dataset_TABE_Live) and self.live_dataset.flag == 'test'
+        
+        batch_x, batch_y, batch_x_mark, batch_y_mark, = self.dataset.feed_data(df_new_data)
+
+        batch_x = torch.tensor(batch_x).unsqueeze(0)
+        batch_y = torch.tensor(batch_y).unsqueeze(0)
+        batch_x_mark = torch.tensor(batch_x_mark).unsqueeze(0)
+        batch_y_mark = torch.tensor(batch_y_mark).unsqueeze(0)
+        fcst, _ = \
+            self.proceed_onestep(batch_x, batch_y, batch_x_mark, batch_y_mark)            
+
+        if self.dataset.scale:
+            data_tf = np.zeros((1, self.dataset.data_y.shape[1]))
+            data_tf[:, -1] = fcst
+            fcst = self.dataset.inverse_transform(data_tf)[0, -1]
+
+        return fcst, None, None
+    
+
+    def prepare_live(self, df_previous_data):
+        self.dataset, data_loader = get_data_provider(self.tabe_model.configs, 
+                                                                flag='ensemble_train', step_by_step=True, df_raw=df_previous_data)
+        
+        self.prepare_result_storage(len(self.dataset)) 
+
+        self.train(self.dataset, data_loader)
+
+        self.dataset.set_flag('test')
+
+        self.prepare_result_storage() 
+

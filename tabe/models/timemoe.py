@@ -13,7 +13,7 @@ class TimeMoE(AbstractModel):
     MAX_CONTEXT_LEN = 4096 # limitation of TimeMoE architecture
 
     def __init__(self, configs, device, name='TimeMoE', ds_size='large'):
-        super().__init__(configs, name)
+        super().__init__(configs, device, name)
         self.device = device
         model_path = \
             'Maple728/TimeMoE-50M' if ds_size == 'base' else  \
@@ -55,8 +55,7 @@ class TimeMoE(AbstractModel):
     def test(self):
         raise NotImplementedError
 
-    def proceed_onestep(self, batch_x, batch_y, batch_x_mark, batch_y_mark, training: bool = False):
-        assert batch_x.shape[0]==1 and batch_y.shape[0]==1
+    def _forward_onestep(self, batch_x, batch_y, batch_x_mark, batch_y_mark):
         assert batch_x.shape[1] <= self.MAX_CONTEXT_LEN, f'Exceeded TimeMoE\'s Max context length!'
 
         # Shapes of given parameters
@@ -83,16 +82,10 @@ class TimeMoE(AbstractModel):
             inputs=batch_x.to(self.device).to(self.model.dtype),
             max_new_tokens=1, # prediction_length
         )
-        y_hat = outputs[0, -1].item()
 
-        # calculate the actuall loss of next timestep
-        y = batch_y[0, -1:, -1] 
-        loss = self.criterion(torch.tensor(y_hat), y).item()
+        # TODO : Training with the new data 
 
-        if training: # TODO 
-            pass
-
-        return y_hat, loss
+        return outputs[-1,-1]
 
 
     def predict(self, seqs, context_len=None, pred_len=1):

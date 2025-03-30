@@ -20,12 +20,14 @@ from cmamba.models import CMamba
 
 # TABE 
 from tabe.models.abstractmodel import AbstractModel
-from tabe.models.basemodels import EtsModel, SarimaModel, AutoSarimaModel, TSLibModel, DrifterModel, NoiseModel
+from tabe.models.stat_model import EtsModel, SarimaModel, AutoSarimaModel
+from tabe.models.synth_model import DrifterModel, NoiseModel
+from tabe.models.tslibmodel import TSLibModel
 from tabe.models.timemoe import TimeMoE
 from tabe.models.timer import Timer
 from tabe.models.timesfm import TimesFM
 from tabe.models.combiner import CombinerModel
-from tabe.models.adjuster import AdjusterModel, TimeMoeAdjuster, GpmAdjuster
+from tabe.models.adjuster import AdjusterModel, TimeMoeAdjuster #, GpmAdjuster
 from tabe.models.tabe import TabeModel
 from tabe.utils.mem_util import MemUtil
 import tabe.utils.report as report
@@ -351,27 +353,53 @@ def _create_base_model(configs, device, model_name) -> AbstractModel:
     return model
 
 
-def _report_results(configs, result_dir, y, y_hat_adj, y_hat_cbm=None, y_hat_bsm=None, basemodels=None):
+def _report_results(configs, result_dir, tabe, combiner, basemodels):
 
-    report.report_losses(y, y_hat_adj, y_hat_cbm, y_hat_bsm, basemodels)
+    test_set = tabe.dataset    
+    truths = test_set.data_y[-len(test_set):, -1]
+    truths = truths[1:] # truths[0] is the thuth of the time step just before testing
+    tabe_preds = tabe.predictions[:-1] # exclude the last one, which does not have corresponding truth
+    cbm_preds = combiner.predictions[:-1]
+    bsm_preds = [bm.predictions[:-1] for bm in basemodels]    
 
-    report.plot_forecast_result(y, y_hat_adj,  None, None, y_hat_cbm, y_hat_bsm, basemodels,
+    need_to_invert_data = True if test_set.scale else False
+    if need_to_invert_data:            
+        n_features = test_set.data_y.shape[1]
+        data_truths = np.zeros((len(truths), n_features))
+        data_tabe_preds = np.zeros((len(truths), n_features))
+        data_cbm_preds = np.zeros((len(truths), n_features))
+        data_truths[:, -1] = truths
+        data_tabe_preds[:, -1] = tabe_preds
+        data_cbm_preds[:, -1] = cbm_preds
+        truths = test_set.inverse_transform(data_truths)[:, -1]
+        tabe_preds = test_set.inverse_transform(data_tabe_preds)[:, -1]
+        cbm_preds = test_set.inverse_transform(data_cbm_preds)[:, -1]
+        for i in range(len(bsm_preds)):
+            data_bsm_preds = np.zeros((len(truths), n_features))
+            data_bsm_preds[:, -1] = bsm_preds[i]
+            bsm_preds[i] = test_set.inverse_transform(data_bsm_preds)[:, -1]
+
+    report.report_losses(truths, tabe_preds, cbm_preds, bsm_preds, basemodels)
+
+    # report.report_losses2(tabe, combiner, basemodels)
+
+    report.plot_forecast_result(truths, tabe_preds,  None, None, cbm_preds, bsm_preds, basemodels,
                         filepath = result_dir + "/models_forecast_comparison.pdf")
 
-    report.report_classifier_performance(y, y_hat_adj, y_hat_cbm, y_hat_bsm, basemodels)
+    report.report_classifier_performance(truths, tabe_preds, cbm_preds, bsm_preds, basemodels)
 
     # save forecast result
     df_fcst_result = pd.DataFrame() 
-    df_fcst_result['Truths'] = y
-    df_fcst_result['Adjuster'] = y_hat_adj
+    df_fcst_result['Truths'] = truths
+    df_fcst_result['Adjuster'] = tabe_preds
     # df_fcst_result[f'Adjuster_q_low_{configs.quantile}'] = y_hat_q_low
     # df_fcst_result[f'Adjuster_q_high_{configs.quantile}'] = y_hat_q_high
     # df_fcst_result['Adjuster_devi_sd'] = devi_stddev
-    if y_hat_cbm is not None:
-        df_fcst_result['Combiner'] = y_hat_cbm
-    if y_hat_bsm is not None:
+    if cbm_preds is not None:
+        df_fcst_result['Combiner'] = cbm_preds
+    if bsm_preds is not None:
         for i, bm in enumerate(basemodels):
-            df_fcst_result[bm.name] = y_hat_bsm[i]
+            df_fcst_result[bm.name] = bsm_preds[i]
     df_fcst_result.to_csv(path_or_buf=result_dir + "/forecast_results.csv", index=False)
 
     # Trading Simulations ---------------
@@ -379,33 +407,33 @@ def _report_results(configs, result_dir, y, y_hat_adj, y_hat_cbm=None, y_hat_bsm
     target = configs.target
     if target in ['LogRet1',]:
         # Convert data to 'Ret'
-        y = np.exp(y) - 1
-        y_hat_adj = np.exp(y_hat_adj) - 1
+        truths = np.exp(truths) - 1
+        tabe_preds = np.exp(tabe_preds) - 1
         # y_hat_q_low = np.exp(y_hat_q_low) - 1
-        if y_hat_cbm is not None:
-            y_hat_cbm = np.exp(y_hat_cbm) - 1
-        if y_hat_bsm is not None:
-            for i in range(len(y_hat_bsm)):
-                y_hat_bsm[i] = np.exp(y_hat_bsm[i]) - 1
+        if cbm_preds is not None:
+            cbm_preds = np.exp(cbm_preds) - 1
+        if bsm_preds is not None:
+            for i in range(len(bsm_preds)):
+                bsm_preds[i] = np.exp(bsm_preds[i]) - 1
 
         # Simulation with 'Ret'
         # for apply_threshold_prob in [False, True]:
         for apply_threshold_prob in [False]:
             for strategy in ['buy_and_hold', 'daily_buy_sell', 'buy_hold_sell_v1', 'buy_hold_sell_v2']:
                 df_sim_result = pd.DataFrame() 
-                df_sim_result['Adjuster'] = simulate_trading(y, y_hat_adj, strategy, None, apply_threshold_prob, 
+                df_sim_result['Tabe'] = simulate_trading(truths, tabe_preds, strategy, None, apply_threshold_prob, 
                                                              buy_threshold=configs.buy_threshold_ret, buy_threshold_q=None, fee_rate=configs.fee_rate)
-                if y_hat_cbm is not None:
-                    df_sim_result['Combiner'] = simulate_trading(y, y_hat_cbm, strategy, None, apply_threshold_prob,
+                if cbm_preds is not None:
+                    df_sim_result['Combiner'] = simulate_trading(truths, cbm_preds, strategy, None, apply_threshold_prob,
                                                              buy_threshold=configs.buy_threshold_ret, buy_threshold_q=None, fee_rate=configs.fee_rate)
-                if y_hat_bsm is not None:
+                if bsm_preds is not None:
                     for i, bm in enumerate(basemodels):
-                        df_sim_result[bm.name] = simulate_trading(y, y_hat_bsm[i], strategy=strategy,
+                        df_sim_result[bm.name] = simulate_trading(truths, bsm_preds[i], strategy=strategy,
                                                              buy_threshold=configs.buy_threshold_ret, buy_threshold_q=None, fee_rate=configs.fee_rate)
                 df_sim_result.index = ['Acc. ROI', 'Mean ROI', '# Trades', '# Win_Trades', 'Winning Rate']
                 report.report_trading_simulation(df_sim_result, 
                                                  strategy+'_prob' if apply_threshold_prob else strategy, 
-                                                 len(y))
+                                                 len(truths))
     else:
         logger.warning(f"Trading simulation for target {target} is not supported now.")
 
@@ -423,6 +451,11 @@ def create_tabe(args):
     _set_seed()
 
     configs = _get_parser().parse_args(args)
+
+    assert configs.label_len == 1
+    assert configs.pred_len == 1
+    assert configs.features != 'M', \
+        "Combiner only supports feature type ['MS', 'S'], and label_len ==1 "
 
     if len(configs.basemodel) == 0:
         raise ValueError("At least one base model should be specified in the configuration.")
@@ -460,7 +493,7 @@ def create_tabe(args):
     if configs.combiner is not None:
         combiner_configs = copy.deepcopy(configs)
         combiner_configs.__dict__.update(configs.combiner.__dict__) # add/update with model-specific arguments
-    combinerModel = CombinerModel(combiner_configs, basemodels)
+    combinerModel = CombinerModel(combiner_configs, device, basemodels)
 
     if configs.adjuster_model == 'none':
         adjusterModel = None
@@ -476,8 +509,8 @@ def create_tabe(args):
         else:
             raise ValueError(f"Model {configs.adjuster_model} is not supported as an Adjuster model")
 
-    tabeModel = TabeModel(configs, combinerModel, adjusterModel)
-    return tabeModel, result_dir, basemodels
+    tabeModel = TabeModel(configs, device, combinerModel, adjusterModel)
+    return tabeModel, combinerModel, basemodels, result_dir
     
 
 def destroy_tabe(tabeModel):
@@ -487,18 +520,17 @@ def destroy_tabe(tabeModel):
 
 
 def _run(args=None):
-    tabeModel, result_dir, basemodels = create_tabe(args)
+    tabeModel, combinerModel, basemodels, result_dir = create_tabe(args)
 
     logger.info('Training Tabe model ======================\n')
     tabeModel.train()    
     
     logger.info('Testing ==================================\n')
+    tabeModel.test()
 
-    y, tabe_pred, y_hat_cbm, y_hat_bsm, y_hat_q_low, y_hat_q_high, buy_threshold_q, devi_stddev = tabeModel.test()
-    _report_results(tabeModel.configs, result_dir, y, tabe_pred, y_hat_cbm, y_hat_bsm, basemodels)        
+    logger.info('Reporting ==================================\n')
 
-    # y, fcst = tabeModel.test_step_by_step()
-    # _report_results(tabeModel.configs, result_dir, y, fcst)
+    _report_results(tabeModel.configs, result_dir, tabeModel, combinerModel, basemodels)
 
     destroy_tabe(tabeModel)
     logger.info('Bye ~~~~~~')

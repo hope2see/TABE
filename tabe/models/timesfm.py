@@ -20,7 +20,7 @@ class TimesFM(AbstractModel):
     MAX_CONTEXT_LEN = 2048 # limitation of TimesFM 2.0
 
     def __init__(self, configs, device=None, name='TimesFM'):
-        super().__init__(configs, name)
+        super().__init__(configs, device, name)
         self.device = device
         self.checkpoint_path = 'google/timesfm-2.0-500m-pytorch'
         
@@ -50,12 +50,10 @@ class TimesFM(AbstractModel):
     def test(self):
         raise NotImplementedError
 
-    def proceed_onestep(self, batch_x, batch_y, batch_x_mark, batch_y_mark, training: bool = False):
-        assert batch_x.shape[0]==1 and batch_y.shape[0]==1
+    def _forward_onestep(self, batch_x, batch_y, batch_x_mark, batch_y_mark):
         assert batch_x.shape[1] <= self.MAX_CONTEXT_LEN, f'Exceeded TimesFM\'s Max context length!'
 
         # Given: batch_x.shape = (batch_len=1, seq_len, feature_dim)
-
         # Reshape batch_x from (batch_len, seq_len, feature_dim) to (batch_len, seq_len)
         batch_x = batch_x[:, :, -1] # target feature only
 
@@ -95,14 +93,8 @@ class TimesFM(AbstractModel):
             batch_x,
             forecast_context_len = batch_x.shape[1]
         )
-        y_hat = point_forecast[0][0]
+        pred = point_forecast[0][0]
 
-        # calculate the actuall loss of next timestep
-        y = batch_y[0, -1:, -1] 
-        loss = self.criterion(torch.tensor(y_hat), y).item()
+        # TODO : Training with the new data 
 
-        if training: # TODO 
-            pass
-
-        return y_hat, loss
-
+        return pred

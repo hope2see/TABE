@@ -228,6 +228,10 @@ class Dataset_TABE_Base(Dataset):
         return 'unknown', None
 
 
+    def _get_border(self, df_data):
+        raise NotImplementedError
+
+
     def _prepare_timestamp(self, df_data, border1, border2):
         df_stamp = df_data[['Date']][border1:border2]
         if self.timeenc == 0:
@@ -242,7 +246,11 @@ class Dataset_TABE_Base(Dataset):
         self.data_stamp = data_stamp
         
     
-    def _prepare_data_xy(self, df_data, border1, border2, fit_border1=None, fit_border2=None):
+    def _prepare_data_xy(self, df_data, data_begin, data_end, ref_data_begin=None, ref_data_end=None):
+        """
+            data_begin, data_end : borders of data
+            ref_data_begin, ref_data_end : borders of reference_data used to normalize the given data
+        """
         # move 'target' to the right-most column
         cols = list(df_data.columns)
         cols.remove(self.target)
@@ -257,21 +265,137 @@ class Dataset_TABE_Base(Dataset):
 
         # normalize 
         if self.scale:
-            train_data = df_data[fit_border1:fit_border2]
-            self.scaler.fit(train_data.values)
+            ref_data = df_data[ref_data_begin:ref_data_end]
+            self.scaler.fit(ref_data.values)
             data = self.scaler.transform(df_data.values)
         else:
             data = df_data.values
 
-        self.data_x = data[border1:border2]
-        self.data_y = data[border1:border2]
+        self.data_x = data[data_begin:data_end]
+        self.data_y = data[data_begin:data_end]
         # if self.set_type == 0 and self.args.augmentation_ratio > 0:
         #     self.data_x, self.data_y, augmentation_tags = run_augmentation_single(self.data_x, self.data_y, self.args)
 
 
+    def _read_data(self, df_data, copy=True):
+        if copy:
+            df_data = df_data.copy()
+
+        begin, end, ref_data_begin, ref_data_end = self._get_border(df_data)
+
+        self._prepare_timestamp(df_data, begin, end)
+
+        self._prepare_data_xy(df_data, begin, end, ref_data_begin, ref_data_end)
+
+
+    def __getitem__(self, index):
+        """
+        NOTE : 
+        For 'ensemble_train' or 'test' dataset, 
+        seq_y and seq_y_mark do not have the truths for next prediction! 
+        In that case, loss calculation is performed not for the last prediction, not for the current prediction. 
+        By changing the implementation this way, we can use the last (most recent) data point as 
+        normal input data for predict the next target values. 
+        """
+        if index < 0: 
+            index = len(self) + index
+
+        s_begin = index
+        s_end = s_begin + self.seq_len
+        r_begin = s_end - self.label_len
+        # NOTE: The truths for next prediction is NOT included 
+        # in 'ensemble_train' and 'test' dataset! 
+        r_end = r_begin + self.label_len 
+        if self.flag in ['val', 'train']:
+            r_end += self.pred_len
+
+        seq_x = self.data_x[s_begin:s_end]
+        seq_y = self.data_y[r_begin:r_end]
+        seq_x_mark = self.data_stamp[s_begin:s_end]
+        seq_y_mark = self.data_stamp[r_begin:r_end]
+
+        return seq_x, seq_y, seq_x_mark, seq_y_mark
+
+    def __len__(self):
+        # For 'ensemble_train' and 'test' dataset, we don't discard the last 'pred_len' data points.
+        # This allows the model to forecast for the next target values after the last data points.
+        # Since the next target values are unavailable at the last time steps,
+        # forecasting losses cannot be computed for that prediction.  
+        if self.flag in ['val', 'train']:
+            return len(self.data_x) - self.seq_len - self.pred_len + 1
+        else:
+            return len(self.data_x) - self.seq_len + 1
+
+
+    def inverse_transform(self, data):
+        if self.scale:
+            return self.scaler.inverse_transform(data)
+        else :
+            return data
+
+
+class Dataset_TABE_Live(Dataset_TABE_Base):
+
+    def __init__(self, config, size, flag, timeenc, df_previous, feature_config=_default_feature_config):
+        # assume that Live Dataset is used for ensemble_train or test 
+        assert flag in ['ensemble_train']
+
+        self.df_raw = df_previous.copy()
+        self.feature_config = feature_config
+
+        df_data = _populate_features(config, feature_config, self.df_raw, copy=True)
+        super().__init__(config, size, flag, timeenc, df_data, copy=False, scale=True)
+
+
+    def set_flag(self, flag):
+        # By setting flag, ensemble_train dataset can be changed to be 'test' dataset.
+        self.flag = flag
+
+
     def _get_border(self, df_data):
         """
-        return borders : begin, end, fit_begin, fit_end
+        return borders : begin, end, ref_data_begin, ref_data_end
+        """
+        assert len(df_data) > self.seq_len, f"len(df_data)({len(df_data)}) should be larger than seq_len({self.seq_len})"
+        
+        if self.flag == 'ensemble_train':
+            begin = 0
+            end = len(df_data)
+        else: # test 
+            # Assume that the latest data has been fed! 
+            begin = len(df_data) - self.seq_len
+            end = len(df_data)
+
+        return begin, end, begin, end 
+
+    
+    def feed_data(self, df_onestep_data: pd.DataFrame, steps=1):
+        # assert len(df_onestep_data) == self.config.seq_len
+        assert len(df_onestep_data) == 1
+        assert steps == 1 # currently only 1 step supported 
+
+        # assume the df_raw is the right next data of self.df_raw     
+        # TODO : minimize the size of keeping data 
+        self.df_raw = pd.concat([self.df_raw, df_onestep_data])
+
+        df_data = _populate_features(self.config, self.feature_config, self.df_raw, copy=True)
+
+        self._read_data(df_data, copy=False)
+
+        return self[-1] # return the latest data
+
+
+class Dataset_TABE_File(Dataset_TABE_Base):
+    def __init__(self, config, size, flag, timeenc, root_path=None, data_path=None):
+        root_path = config.root_path if root_path is None else root_path
+        data_path = config.data_path if data_path is None else data_path        
+        df_data = pd.read_csv(os.path.join(root_path,data_path))
+        df_data['Date'] = pd.to_datetime(df_data['Date'])
+        super().__init__(config, size, flag, timeenc, df_data, copy=False, scale=True)
+
+    def _get_border(self, df_data):
+        """
+        return borders : begin, end, ref_data_begin, ref_data_end
         """
         # test_split : ratio (0.2), or length (100), or start_date ('2020-01-01') of the test_period. 
         test_split_type, test_split = self._parse_test_split(self.config.data_test_split)
@@ -295,112 +419,23 @@ class Dataset_TABE_Base(Dataset):
         logger.info(f"Dataset Period : [Val {num_vali} | Base Train {num_base_train} | Ensemble Train {num_ensemble_train} | Test {num_test}")
         assert num_vali > 20+self.seq_len, f"num_vali({num_vali}) should be larger than 20+seq_len({self.seq_len})"
 
-        type_map = {'val': 0, 'base_train': 1, 'ensemble_train': 2, 'test': 3}
-        set_type = type_map[self.flag]
+        val_borders             = (0,                                       num_vali)
+        base_train_borders      = (val_borders[1]-self.seq_len,             val_borders[1] + num_base_train)
+        # For 'ensemble_train', and 'test', the target(truth) value of next step is not included. 
+        ensemble_train_borders  = (base_train_borders[1]-(self.seq_len-1),    base_train_borders[1] + num_ensemble_train)
+        test_borders            = (ensemble_train_borders[1]-(self.seq_len-1), ensemble_train_borders[1] + num_test)
+        assert test_borders[1] == len(df_data)
 
-        border1s = [0, num_vali - self.seq_len, num_vali + num_base_train - self.seq_len, len(df_data) - num_test - self.seq_len]
-        border2s = [num_vali, num_vali + num_base_train, num_vali + num_base_train + num_ensemble_train, len(df_data)]
-        border1 = border1s[set_type]
-        border2 = border2s[set_type]
+        borders = {
+            'val' : val_borders,
+            'base_train' : base_train_borders,
+            'ensemble_train' : ensemble_train_borders,
+            'test' : test_borders
+        }
 
-        # train_data is used to scaler.fit 
-        return border1, border2, border1s[1], border2s[1]        
+        # base_train_dataset is used as 'reference data' when normalizing other dataset
+        return borders[self.flag][0], borders[self.flag][1], borders['base_train'][0],  borders['base_train'][1]
 
-
-    def _read_data(self, df_data, copy=True):
-        if copy:
-            df_data = df_data.copy()
-
-        begin, end, fit_begin, fit_end = self._get_border(df_data)
-
-        self._prepare_timestamp(df_data, begin, end)
-
-        self._prepare_data_xy(df_data, begin, end, fit_begin, fit_end)
-
-
-    def __getitem__(self, index):
-        if index < 0: 
-            index = len(self) + index
-
-        s_begin = index
-        s_end = s_begin + self.seq_len
-        r_begin = s_end - self.label_len
-        r_end = r_begin + self.label_len + self.pred_len
-
-        seq_x = self.data_x[s_begin:s_end]
-        seq_y = self.data_y[r_begin:r_end]
-        seq_x_mark = self.data_stamp[s_begin:s_end]
-        seq_y_mark = self.data_stamp[r_begin:r_end]
-
-        return seq_x, seq_y, seq_x_mark, seq_y_mark
-
-    def __len__(self):
-        return len(self.data_x) - self.seq_len - self.pred_len + 1
-
-    def inverse_transform(self, data):
-        if self.scale:
-            return self.scaler.inverse_transform(data)
-        else :
-            return data
-
-
-class Dataset_TABE_Live(Dataset_TABE_Base):
-
-    def __init__(self, config, size, flag, timeenc, df_previous, feature_config=_default_feature_config):
-        # assume that Live Dataset is used for ensemble_train or test 
-        assert flag in ['ensemble_train']
-
-        self.df_raw = df_previous.copy()
-        self.feature_config = feature_config
-
-        df_data = _populate_features(config, feature_config, self.df_raw, copy=True)
-        super().__init__(config, size, flag, timeenc, df_data, copy=False, scale=True)
-
-    # By setting flag, ensemble_train dataset can be changed to be 'test' dataset.
-    def set_flag(self, flag):
-        self.flag = flag
-
-    def _get_border(self, df_data):
-        """
-        return borders : begin, end, fit_begin, fit_end
-        """
-        assert len(df_data) > self.seq_len, f"len(df_data)({len(df_data)}) should be larger than seq_len({self.seq_len})"
-        
-        if self.flag == 'ensemble_train':
-            begin = 0
-            end = len(df_data)
-        else: # test 
-            # Assume that the latest data has been fed! 
-            begin = len(df_data) - self.seq_len
-            end = len(df_data)
-
-        return begin, end, begin, end 
-
-
-    def feed_data(self, df_onestep_data: pd.DataFrame, steps=1):
-        # assert len(df_onestep_data) == self.config.seq_len
-        assert len(df_onestep_data) == 1
-        assert steps == 1 # currently only 1 step supported 
-
-        # assume the df_raw is the right next data of self.df_raw     
-        # TODO : minimize the size of keeping data 
-        self.df_raw = pd.concat([self.df_raw, df_onestep_data])
-
-        df_data = _populate_features(self.config, self.feature_config, self.df_raw, copy=True)
-
-        self._read_data(df_data, copy=False)
-
-        return self[-1] # return the latest batches
-
-
-class Dataset_TABE_File(Dataset_TABE_Base):
-    def __init__(self, config, size, flag, timeenc, root_path=None, data_path=None):
-        root_path = config.root_path if root_path is None else root_path
-        data_path = config.data_path if data_path is None else data_path        
-        df_data = pd.read_csv(os.path.join(root_path,data_path))
-        df_data['Date'] = pd.to_datetime(df_data['Date'])
-        super().__init__(config, size, flag, timeenc, df_data, copy=False, scale=True)
-    
 
 class Dataset_TABE_Online(Dataset_TABE_File):
     def __init__(self, config, size, flag, timeenc, feature_config=_default_feature_config):        
