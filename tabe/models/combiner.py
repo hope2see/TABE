@@ -25,7 +25,7 @@ import tabe.utils.weighting as weighting
 
 
 import warnings
-warnings.filterwarnings('ignore')
+# warnings.filterwarnings('ignore')
 
 
 _mem_util = MemUtil(rss_mem=False, python_mem=False)
@@ -57,7 +57,9 @@ class CombinerModel(AbstractModel):
         self.basemodel_weights = np.array([1/len(basemodels)] * len(basemodels)) # initially, weights are evenly distributed.
         self.basemodel_losses = None # the last basemodel_losses. Shape = (len(basemodels), HPO_EVALUATION_PEROID)
         self.truths = None # the last 'y' values. Shape = (HPO_EVALUATION_PEROID)
+        self.weights_history = None
         self.hpo_policy = self.configs.hpo_policy        
+
         self.hp_dict = { # initial setting of HP
             'lookback_window':self.configs.lookback_win, # for weighting 
             'discount_factor':self.configs.discount_factor,
@@ -159,46 +161,6 @@ class CombinerModel(AbstractModel):
                 basemodel.load_saved_model()
 
 
-    # # TODO !! FIXME 
-    # # For  ensemble_train period, basemodel.proceed_onestep() is performed twice!!  
-    # # Once in here, second time in Combiner.proceed_onestep()
-    # def train(self, esm_train_dataset=None, esb_train_loader=None):
-    #     if esm_train_dataset is None :
-    #         esm_train_dataset, esb_train_loader = get_data_provider(self.configs, flag='ensemble_train', step_by_step=True)
-
-    #     time_now = time.time()
-
-    #     basemodel_preds = np.empty((len(self.basemodels), len(esb_train_loader)))
-    #     basemodel_losses = np.empty((len(self.basemodels), len(esb_train_loader)))
-
-    #     for t, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(esb_train_loader):
-    #         for m, basemodel in enumerate(self.basemodels):
-    #             basemodel_preds[m, t], basemodel_losses[m, t] = basemodel.proceed_onestep(
-    #                 batch_x, batch_y, batch_x_mark, batch_y_mark) 
-    #         _mem_util.print_memory_usage()
-
-    #     spent_time = (time.time() - time_now) 
-    #     logger.info(f"CombinerModel.train() : {spent_time:.4f} sec elapsed for getting base models' predictions")
-
-    #     # Discard the first result, because its loss is None.
-    #     basemodel_losses = basemodel_losses[:, 1:]  
-
-    #     if self.hpo_policy == 0: # No HPO
-    #         lookback_window = int(self.hp_dict['lookback_window'])
-    #         assert basemodel_losses.shape[1] >= lookback_window, \
-    #                 f'basemodel_losses.shape[1]) {basemodel_losses.shape[1]} is shorter than lookback_window ({lookback_window})'
-    #         self.basemodel_losses = basemodel_losses[:, -lookback_window:]
-    #         self.truths = esm_train_dataset.data_y[-lookback_window:, -1]
-    #     else:
-    #         assert self.HPO_PERIOD <= len(esb_train_loader), \
-    #                 f'length of train data ({len(esb_train_loader)}) should be longer than HPO_PERIOD({self.HPO_PERIOD})'     
-    #         self.basemodel_losses = basemodel_losses[:, -self.HPO_PERIOD:]
-    #         self.truths = esm_train_dataset.data_y[-self.HPO_PERIOD:, -1]
-    #         self.hp_dict, trials = self._optimize_HP(max_evals=self.configs.max_hpo_eval)
-    #         report.plot_hpo_result(trials, "HyperParameter Optimization for Combiner",
-    #                             self._get_result_path()+"/hpo_result.pdf")
-
-
     def _need_to_do_HPO(self) -> bool:
         return (self.hpo_policy == 2) or (self.hpo_policy == 1 and self.hpo_counter == 0)
 
@@ -213,11 +175,21 @@ class CombinerModel(AbstractModel):
         else:
             self.basemodel_losses = np.concatenate((self.basemodel_losses, bm_losses), axis=1)
             self.truths = np.concatenate((self.truths, [truth]))
-
             required_len = self.get_max_context_len()
             if len(self.truths) > required_len:
                 self.basemodel_losses = self.basemodel_losses[:, -required_len:]
                 self.truths = self.truths[-required_len:]
+
+    # for analyzing 
+    def _save_weights_history(self, weights):
+        if self.weights_history is None:
+            self.weights_history = np.empty((len(self.basemodels), 1))
+            self.weights_history[:,0] = weights
+        else:
+            self.weights_history = np.concatenate((self.weights_history, np.expand_dims(weights, axis=1)), axis=1)
+            required_len = self.get_max_context_len()
+            if self.weights_history.shape[1] > required_len:
+                self.weights_history = self.weights_history[:, -required_len:]
 
     def _do_HPO(self):
         if self.hpo_counter == 0: 
@@ -252,6 +224,7 @@ class CombinerModel(AbstractModel):
             lookback_window = int(self.hp_dict['lookback_window'])
             self.basemodel_weights = self.compute_basemodel_weights(
                 self.hp_dict, self.basemodel_losses[:, -lookback_window:], self.basemodel_weights)
+            self._save_weights_history(self.basemodel_weights)            
 
         pred = np.dot(self.basemodel_weights, bm_preds)
         return pred

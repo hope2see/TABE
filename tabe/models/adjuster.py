@@ -34,35 +34,16 @@ class AdjusterModel(AbstractModel):
 
     def __init__(self, configs, device, name='Adjuster'):
         super().__init__(configs, device, name)
-        self.use_adjuster_credibility = False
-        # self.preds = None
-        # self.cbm_preds = None # the last predictions of combiner. shape = (HPO_EVALUATION_PEROID)
-        # self.truths = None # the last 'y' values. shape = (HPO_EVALUATION_PEROID)
-        self.credibility = 0.5 # relative credibility against combiner model. Initially neutral value 0.5
-        self.cbm_deviations = None
+        self.cbm_deviations = None # TODO : keep only necessary length
+        self.adj_deviations = None # TODO : keep only necessary length
         self.prev_cbm_pred = None
+        self.prev_adj_pred = None
+        self.use_adjuster_credibility = False
+        self.weights = np.array([0.5,0.5]) # [adjuster_weight, combiner_weight]        
+        # self.adj_stat_win = max(configs.adj_stat_win, configs.seq_len)
+        # self.cbm_devi_stat = None # (mean, std) of cbm_deviations
+        # self.adj_devi_stat = None # (mean, std) of adj_deviations
     
-
-    # def _predict_next(self, truths, cbm_preds, user_param=None):
-    #     # truths and cbm_preds are time-aligned, and cbm_preds[-1] has no matching truth.
-    #     assert len(truths) == len(cbm_preds) - 1 
-
-    #     cbm_deviations = truths - cbm_preds
-    #     exp_deviation = self._predict_deviation(cbm_deviations, user_param)
-
-    #     # # calculate std_deviations
-    #     # LOOKBACK_WIN_FOR_SD = 30 # lookback window size for computing std_dev of deviations 
-    #     # my_deviations = truths - preds
-    #     # if len(my_deviations) >= LOOKBACK_WIN_FOR_SD: 
-    #     #     sd_adj = my_deviations[-LOOKBACK_WIN_FOR_SD:].std()
-    #     #     sd_cbm = cbm_deviations[-LOOKBACK_WIN_FOR_SD:].std()
-    #     #     logger.info(f"Adjuster._predict_next(): exp_dev={exp_deviation.item():.4f}, sd_adj={sd_adj.item():.4f}, sd_cbm={sd_cbm.item():.4f}")
-    #     # else:
-    #     #     sd_adj = None
-    #     #     logger.info(f"Adjuster._predict_next(): exp_dev={exp_deviation.item():.4f}, sd_adj=None, sd_cbm=None")
-
-    #     return cbm_preds[-1] + exp_deviation.item()
-
 
     def _do_train(self, truths, cbm_preds):
         raise NotImplementedError
@@ -81,25 +62,32 @@ class AdjusterModel(AbstractModel):
         # self.truths = truths[1:]
         # self.cbm_preds = cbm_preds 
         self.cbm_deviations = truths[1:] - cbm_preds[:-1]
+        adj_preds = self._do_train(cbm_preds)
+        self.adj_deviations = truths[1:] - adj_preds[:-1]
         self.prev_cbm_pred = cbm_preds[-1]
-        self.preds = self._do_train(cbm_preds)
+        self.prev_adj_pred = adj_preds[-1]
+
+        # if len(self.cbm_deviations) > self.adj_stat_win:
+        #     self.cbm_deviations = self.cbm_deviations[-self.adj_stat_win:]
+        #     self.adj_deviations = self.adj_deviations[-self.adj_stat_win:]
+        # self.cbm_devi_stat = (self.cbm_deviations.mean(), self.cbm_deviations.std())
+        # self.adj_devi_stat = (self.adj_deviations.mean(), self.adj_deviations.std())
 
 
     def adjust_onestep(self, truth, cbm_pred):
-        # truth is the target value at one step before cbm_pred.
+        # truth is the target value at one step just before the given cbm_pred.
         cbm_devi = truth - self.prev_cbm_pred
         self.cbm_deviations = np.concatenate((self.cbm_deviations, np.array([cbm_devi])))
-        self.prev_cbm_pred = cbm_pred
+        adj_devi = truth - self.prev_adj_pred
+        self.adj_deviations = np.concatenate((self.adj_deviations, np.array([adj_devi])))
 
-        exp_deviation = self._predict_deviation()
-        pred = cbm_pred + exp_deviation.item()
+        pred = cbm_pred + self._predict_deviation().item()
 
         if self.use_adjuster_credibility : 
-            # get credibility (or weight over combiner) of Adjuster model 
-            eval_period = min(len(self.preds), self.configs.lookback_win+1)
+            eval_period = min(len(self.cbm_deviations), self.configs.lookback_win+1)
             if eval_period > 0:
-                my_loss = np.abs(self.preds[-eval_period:-1] - self.truths[-eval_period+1:])   
-                cbm_loss = np.abs(self.cbm_preds[-eval_period:-1] - self.truths[-eval_period+1:])
+                my_loss = np.abs(self.adj_deviations[-eval_period:])
+                cbm_loss = np.abs(self.cbm_deviations[-eval_period:])
                 model_losses = np.array([my_loss, cbm_loss])
                 self.weights = weighting.compute_model_weights(model_losses, self.weights, 
                                         lookback_window=eval_period, 
@@ -115,6 +103,15 @@ class AdjusterModel(AbstractModel):
             pred = pred * self.weights[0] + cbm_pred + self.weights[1]
             # logger.info(f'Adj.predict : final_pred={final_pred:.5f}, y_hat={y_hat:.5f}, y_hat_cbm={y_hat_cbm:.5f}')
 
+        self.prev_cbm_pred = cbm_pred
+        self.prev_adj_pred = pred
+
+        # if len(self.cbm_deviations) > self.adj_stat_win:
+        #     self.cbm_deviations = self.cbm_deviations[-self.adj_stat_win:]
+        #     self.adj_deviations = self.adj_deviations[-self.adj_stat_win:]
+        # self.cbm_devi_stat = (self.cbm_deviations.mean(), self.cbm_deviations.std())
+        # self.adj_devi_stat = (self.adj_deviations.mean(), self.adj_deviations.std())
+        
         return pred
 
 
@@ -123,14 +120,13 @@ class TimeMoeAdjuster(AdjusterModel):
     def __init__(self, configs, device):
         super().__init__(configs, device, 'TimeMoeAdjuster')
         self.moe = TimeMoE(configs, device)
-        self.LOOKBACK_WIN = 32
+        self.LOOKBACK_WIN = configs.seq_len
 
     def _predict_deviation(self, cbm_deviations=None, user_param=None):
         if cbm_deviations is None :
             cbm_deviations = self.cbm_deviations
         assert len(cbm_deviations) >= self.LOOKBACK_WIN
-        preds = self.moe.predict(torch.tensor([cbm_deviations], dtype=self.moe.model.dtype), context_len=self.LOOKBACK_WIN)
-        exp_deviation = preds[0]
+        exp_deviation = self.moe.predict(cbm_deviations, context_len=self.LOOKBACK_WIN)
         return exp_deviation
 
     def _do_train(self, cbm_preds):
@@ -142,7 +138,6 @@ class TimeMoeAdjuster(AdjusterModel):
                 preds[t] = cbm_preds[t]
             else:
                 # TODO : Avoid copying data 
-                # preds[t] = self._predict_next(truths[:t], cbm_preds[:t])
                 exp_deviation = self._predict_deviation(self.cbm_deviations[:t])
                 preds[t] = cbm_preds[t] + exp_deviation.item()
 
@@ -177,7 +172,7 @@ class TimeMoeAdjuster(AdjusterModel):
 #         self.hpo_policy = self.configs.hpo_policy
 #         if self.hpo_policy == 0 :
 #             self.hp_dict = {
-#                 'gpm_lookback_win':self.configs.gpm_lookback_win,
+#                 'adj_lookback_win':self.configs.adj_lookback_win,
 #                 # 'lookback_window':self.configs.lookback_win, # for weighting 
 #                 # 'discount_factor':self.configs.discount_factor,
 #                 # 'avg_method':self.configs.avg_method,
@@ -187,7 +182,7 @@ class TimeMoeAdjuster(AdjusterModel):
 #                 }
 #         else:
 #             self.hp_space = {
-#                 'gpm_lookback_win': hp.choice('gpm_lookback_win', [5, 10, 30, 50, 100, self.UNLIMITED_LOOKBACK_WIN]), 
+#                 'adj_lookback_win': hp.choice('adj_lookback_win', [5, 10, 30, 50, 100, self.UNLIMITED_LOOKBACK_WIN]), 
 #                 # 'lookback_window': hp.quniform('lookback_window', 1, 10, 1),
 #                 # 'discount_factor':hp.uniform('discount_factor', 1.0, 2.0),
 #                 # 'avg_method': hp.choice('avg_method', [weighting.AvgMethod.MEAN, weighting.AvgMethod.MEAN_SQUARED]),
@@ -225,9 +220,9 @@ class TimeMoeAdjuster(AdjusterModel):
 #     def _train_new_gpmodel(self, hp_dict, y):
 #         pyro.clear_param_store() # NOTE : Need to do everytime? 
 
-#         gpm_lookback_win = int(hp_dict['gpm_lookback_win'])
-#         if gpm_lookback_win != self.UNLIMITED_LOOKBACK_WIN and len(y) > gpm_lookback_win+1:
-#             y = y[-(gpm_lookback_win+1):]
+#         adj_lookback_win = int(hp_dict['adj_lookback_win'])
+#         if adj_lookback_win != self.UNLIMITED_LOOKBACK_WIN and len(y) > adj_lookback_win+1:
+#             y = y[-(adj_lookback_win+1):]
 #         X = y[:-1]
 #         y = y[1:]
 #         gpm = gp.models.GPRegression(X, y, self.gpm_kernel, 
@@ -244,7 +239,7 @@ class TimeMoeAdjuster(AdjusterModel):
 #             optim_tracker(mean_loss, None)
 #             if optim_tracker.early_stop:
 #                 break
-#         logger.debug(f"Adj.HPO: when lb_win_size={gpm_lookback_win}, after training {step} times, loss={mean_loss:.4f}")
+#         logger.debug(f"Adj.HPO: when lb_win_size={adj_lookback_win}, after training {step} times, loss={mean_loss:.4f}")
         
 #         return gpm
  
@@ -257,10 +252,10 @@ class TimeMoeAdjuster(AdjusterModel):
 #         X = torch.cat([gpm.X, gpm.y[-1:]]) # Add the last y to the end of 'X's
 #         y = torch.cat([gpm.y, y]) # Add new observation to the end of 'y's
 
-#         gpm_lookback_win = int(hp_dict['gpm_lookback_win'])
-#         if gpm_lookback_win != self.UNLIMITED_LOOKBACK_WIN and len(y) > gpm_lookback_win+1:
-#             X = X[-gpm_lookback_win:]
-#             y = y[-gpm_lookback_win:]
+#         adj_lookback_win = int(hp_dict['adj_lookback_win'])
+#         if adj_lookback_win != self.UNLIMITED_LOOKBACK_WIN and len(y) > adj_lookback_win+1:
+#             X = X[-adj_lookback_win:]
+#             y = y[-adj_lookback_win:]
 #         gpm.set_data(X, y)
 
 #         optim_tracker = OptimTracker(use_early_stop=True, patience=self.configs.max_gp_opt_patience, verbose=False, save_to_file=False)
@@ -271,7 +266,7 @@ class TimeMoeAdjuster(AdjusterModel):
 #             optim_tracker(mean_loss, None)
 #             if optim_tracker.early_stop:
 #                 break                
-#         logger.debug(f"Adj.HPO: when lb_win_size={gpm_lookback_win}, after training  {step} times, loss={mean_loss:.4f}")
+#         logger.debug(f"Adj.HPO: when lb_win_size={adj_lookback_win}, after training  {step} times, loss={mean_loss:.4f}")
 #         return gpm
 
 
@@ -280,7 +275,7 @@ class TimeMoeAdjuster(AdjusterModel):
 #                      max_evals=10):
         
 #         # Objective function (loss function) for hyper-parameter optimization
-#         # Loss == Mean of the lossees in all timesteps in the period [gpm_lookback_win, len(y)]
+#         # Loss == Mean of the lossees in all timesteps in the period [adj_lookback_win, len(y)]
 #         def _evaluate_hp(hp_dict):
 #             deviations = (self.truths - self.cbm_preds)[:-1] # exclude the last one, becuause it is the target to predict
 #             assert len(deviations) > self.HPO_EVAL_PEROID

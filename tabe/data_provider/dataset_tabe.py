@@ -13,7 +13,7 @@ from utils.timefeatures import time_features
 from tabe.utils.misc_util import logger
 
 import warnings
-warnings.filterwarnings('ignore') 
+# warnings.filterwarnings('ignore') 
 
 
 _default_feature_config = {

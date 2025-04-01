@@ -17,9 +17,10 @@ from tabe.utils.logger import logger
 from tabe.utils.misc_util import OptimTracker
 from tabe.data_provider.dataset_loader import get_data_provider
 from tabe.models.abstractmodel import AbstractModel
+from tabe.utils.logger import logger
 
 
-warnings.filterwarnings('ignore')
+# warnings.filterwarnings('ignore')
 
 
 # NOTE 
@@ -80,6 +81,21 @@ class AutoSarimaModel(StatisticalModel):
         super().__init__(configs, device, name) 
 
     def _fit(self, endog):
+        # pmdarima.auto_arima() often fails when endog series contains outliers.
+        # Signs of Failure
+        # •	Forecast returns [0.] or constant values
+        # •	Model summary shows all coefficients are 0
+        # •	d, p, or q values look unexpected (e.g., all 0s)
+        # •	Model converges but performance is bad
+        # 
+        # To walk-around this issue, we do 'winsorizing' (clipping outliers)        
+        #
+        # OUTLIER_THRESHOLD = 3 * np.std(endog) # clip top 0.135%, and bottom -0.135% outliers 
+        # endog = np.clip(endog, -OUTLIER_THRESHOLD, OUTLIER_THRESHOLD)
+        # Alternative way : 
+        # from scipy.stats.mstats import winsorize
+        # endog = winsorize(endog, limits=[0.1, 0.1])  # clip top/bottom 10% 
+
         self.model = pm.auto_arima(
             endog,                 # training series
             start_p=1, #start_q=1,  # initial range for p and q
@@ -92,12 +108,14 @@ class AutoSarimaModel(StatisticalModel):
             # D=None,                # let auto_arima find seasonal differencing
             trace=False,            # print output of model selection
             error_action='warn',
-            suppress_warnings=True,
+            suppress_warnings=False,
             # stepwise=True          # more efficient, stepwise approach
         )
         return self
     
     def forecast(self, steps=1):
-        return self.model.predict(n_periods=steps)
-
-
+        pred = self.model.predict(n_periods=steps)
+        if pred[0] == 0 and self.model.order == (0,0,0):
+            logger.info('AutoSarimaModel seems to have failed in fitting! (pred is 0.0)')
+            # self.model.summary()
+        return pred

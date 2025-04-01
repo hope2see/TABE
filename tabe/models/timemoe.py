@@ -1,4 +1,5 @@
 import os
+import numpy as np
 import torch
 from tabe.models.abstractmodel import AbstractModel
 from tabe.utils.logger import logger
@@ -88,18 +89,21 @@ class TimeMoE(AbstractModel):
         return outputs[-1,-1]
 
 
-    def predict(self, seqs, context_len=None, pred_len=1):
+    def predict(self, seqs, context_len=None):
         context_len = len(seqs) if context_len is None else context_len
         context_len = min(context_len, self.MAX_CONTEXT_LEN)
         seqs = seqs[-context_len:]
 
         # normalize seqs
-        mean, std = seqs.mean(dim=-1, keepdim=True), seqs.std(dim=-1, keepdim=True)
+        mean, std = np.mean(seqs), np.std(seqs)
         normed_seqs = (seqs - mean) / std
 
-        output = self.model.generate(normed_seqs, max_new_tokens=pred_len)  
-        normed_predictions = output[:, -pred_len:]  
+        # output = self.model.generate(torch.tensor([normed_seqs], dtype=self.moe.model.dtype), 
+        #                              max_new_tokens=pred_len)  
+        output = self.model.generate(torch.tensor([normed_seqs], device=self.device, dtype=self.model.dtype), 
+                                     max_new_tokens=1)  
+        normed_prediction = output[-1, -1]  
 
         # inverse normalize
-        preds = normed_predictions * std + mean
-        return preds
+        pred = normed_prediction.item() * std + mean
+        return pred

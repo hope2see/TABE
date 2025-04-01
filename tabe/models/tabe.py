@@ -38,6 +38,19 @@ class TabeModel(AbstractModel):
         self.scaler_x_m = StandardScaler() 
         self.scaler_y_m = StandardScaler() 
 
+
+    def _normalize_batch(self, batch_list, inverse=False):
+        scaler_list = [self.scaler_x, self.scaler_y, self.scaler_x_m, self.scaler_y_m]
+        for i, batch in enumerate(batch_list):
+            scaler = scaler_list[i]
+            batch_np = batch.squeeze(0).numpy() # batch.shape = (1, seq_len, feature_dim)
+            if not inverse:
+                scaled_batch_np = scaler.fit_transform(batch_np) 
+            else:
+                scaled_batch_np = scaler.inverse_transform(batch_np) 
+            batch_list[i] = torch.from_numpy(scaled_batch_np).unsqueeze(0)
+        return batch_list
+
     def prepare_result_storage(self, total_steps=None):
         super().prepare_result_storage(total_steps)
         self.combiner.prepare_result_storage(total_steps)
@@ -51,26 +64,17 @@ class TabeModel(AbstractModel):
         self.combiner.prepare_result_storage(len(esb_train_dataset)) 
 
         for t, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(esm_train_loader):
+            # batch_x, batch_y, batch_x_mark, batch_y_mark = \
+            #     self._normalize_batch([batch_x, batch_y, batch_x_mark, batch_y_mark], inverse=False)
             self.combiner.proceed_onestep(batch_x, batch_y, batch_x_mark, batch_y_mark)
+            # batch_x, batch_y, batch_x_mark, batch_y_mark = \
+            #     self._normalize_batch([batch_x, batch_y, batch_x_mark, batch_y_mark], inverse=True)
 
         truths = esb_train_dataset.data_y[-len(esb_train_dataset):, -1] 
         cbm_preds = self.combiner.predictions
 
         if self.adjuster is not None:
             self.adjuster.train(truths, cbm_preds)
-
-
-    # def _normalize_batch(self, batch_list, inverse=False):
-    #     scaler_list = [self.scaler_x, self.scaler_y, self.scaler_x_m, self.scaler_y_m]
-    #     for i, batch in enumerate(batch_list):
-    #         scaler = scaler_list[i]
-    #         batch_np = batch.squeeze(0).numpy() # batch.shape = (1, seq_len, feature_dim)
-    #         if not inverse:
-    #             scaled_batch_np = scaler.fit_transform(batch_np) 
-    #         else:
-    #             scaled_batch_np = scaler.inverse_transform(batch_np) 
-    #         batch_list[i] = torch.from_numpy(scaled_batch_np).unsqueeze(0)
-    #     return batch_list
 
 
     def _forward_onestep(self, batch_x, batch_y, batch_x_mark, batch_y_mark):

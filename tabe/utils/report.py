@@ -66,11 +66,65 @@ def plot_forecast(y, y_hat, title=None, filepath=None):
         plt.savefig(filepath, bbox_inches='tight')
 
 
+def plot_forecasts_with_deviations(truth, adj_pred, cbm_pred, bm_preds, bm_names, 
+                                   adj_devi, cbm_devi, title=None, filepath=None):
+    num_points = len(truth)
+    assert len(adj_devi) == num_points
+    assert len(cbm_devi) == num_points
+
+    fig, (ax_pred, ax_devi) = plt.subplots(2, 1, figsize=(22, 12), sharex=True,
+        gridspec_kw={'height_ratios': [3, 1], 'hspace': 0.02, 'wspace': 0.0}
+    )    
+    ax_pred.set_title("Forecasts and deviations")
+
+    # Forecasts subplot
+    ax_pred.set_ylabel("Forecasts")
+    ax_pred.plot(truth, label='GroundTruth', linewidth=1.5, color='black')
+    ax_pred.plot(adj_pred, label='Adjuster', linewidth=1.5, color='red')
+    ax_pred.plot(cbm_pred, label='Combiner', linewidth=1.5, color='blue')
+    for i, pred in enumerate(bm_preds):
+        ax_pred.plot(pred, label=bm_names[i], linewidth=1, linestyle="--")
+    ax_pred.legend()
+    ax_pred.set_xticks(np.arange(0, num_points, step=1)) 
+    ax_pred.margins(x=0.0, y=0.0)
+    ax_pred.tick_params(axis='both', labelsize=6)
+    ax_pred.grid(True, which='both', linestyle='--', linewidth=0.7)
+    ax_pred.axhline(0, color='black', linewidth=1.0)  
+    height = max(abs(np.min(truth)), abs(np.max(truth))) 
+    ytick = 0.002
+    num_ticks = int(np.ceil(height / ytick))
+    ax_pred.set_yticks(np.linspace(-num_ticks * ytick, num_ticks * ytick, num=2 * num_ticks + 1))
+    ax_pred.set_ylim(-height - ytick, height + ytick)
+    ax_pred.set_autoscale_on(False)
+
+    # deviations subplot
+    ax_devi.set_ylabel('deviation')
+    ax_devi.set_xlabel("Timesteps")
+    adj_devi_label = f'Adjuster [mae={np.mean(np.abs(adj_devi)):.3f}, mean={np.mean(adj_devi):.3f}, std={np.std(adj_devi):.3f}]'
+    ax_devi.plot(adj_devi, label=adj_devi_label, linewidth=1, color='red')
+    cbm_devi_label = f'Combiner [mae={np.mean(np.abs(cbm_devi)):.3f}, mean={np.mean(cbm_devi):.3f}, std={np.std(cbm_devi):.3f}]'
+    ax_devi.plot(cbm_devi, label=cbm_devi_label, linewidth=1, color='blue')
+    ax_devi.legend()
+    ax_devi.grid(True, which='both', linestyle='--', linewidth=0.7)
+    ax_devi.axhline(0, color='black', linewidth=1.0)  
+    ax_devi.margins(x=0.0, y=0.0)
+    ax_devi.tick_params(axis='both', labelsize=6)
+    height = max(abs(np.min(cbm_devi)), abs(np.max(cbm_devi))) 
+    ytick = 0.2
+    num_ticks = int(np.ceil(height / ytick))
+    ax_devi.set_yticks(np.linspace(-num_ticks * ytick, num_ticks * ytick, num=2 * num_ticks + 1))
+    ax_devi.set_ylim(-height - ytick, height + ytick)
+    ax_devi.set_autoscale_on(False)
+
+    plt.show() if filepath is None else plt.savefig(filepath, bbox_inches='tight')
+
+
 def plot_forecast_result(truth, pred,  adj_pred_q_low=None, adj_pred_q_high=None, combiner_pred=None, base_preds=None, basemodels=None, filepath=None):
-    plt.figure(figsize=(12, 6))
+    plt.figure(figsize=(20, 10))
     plt.title('Forecast Comparison')     
     plt.ylabel('Target')
     plt.xlabel('Test Duration (Days)')
+
     plt.plot(truth, label='GroundTruth', linewidth=1.5, color='black')
     plt.plot(pred, label="Tabe Model", linewidth=1.5, color='red')
     if adj_pred_q_low is not None:
@@ -86,28 +140,50 @@ def plot_forecast_result(truth, pred,  adj_pred_q_low=None, adj_pred_q_high=None
         for i, basemodel in enumerate(basemodels):
             plt.plot(base_preds[i], label=f"Base Model [{basemodel.name}]", linewidth=1.5, linestyle=":")
     plt.legend()
-    if filepath is None:
-        plt.show()
-    else:
-        plt.savefig(filepath, bbox_inches='tight')
+
+    plt.xticks(np.arange(0, len(truth), step=1)) 
+    height = max(abs(np.min(truth)), abs(np.max(truth)))
+    plt.yticks(np.arange(-height-0.002, height+0.002, 0.002))
+    plt.grid(True, which='both', linestyle='--', linewidth=0.7)
+    plt.gca().axhline(0, color='black', linewidth=1.0)  
+    plt.tick_params(axis='both', labelsize=5)
+    plt.show() if filepath is None else plt.savefig(filepath, bbox_inches='tight')
 
 
-def plot_weights(weights_hist, title=None, filepath=None):
-    plt.figure(figsize=(8, 5))
-    for i in range(weights_hist.shape[1]):
-        plt.plot(weights_hist[:,i], label=f'Component {i}')
-    if title:
-        plt.title(title)
-    plt.ylim(0, 1)
+
+def plot_deviations_over_time(deviations, filepath=None):
+    plt.figure(figsize=(20, 5))
+    plt.title(f'Combiner Deviations [mean= {np.mean(deviations):.3f}, std={np.std(deviations):.3f}]') 
+    plt.ylabel('deviation')
+    plt.xlabel('timestep')
+    plt.plot(deviations, label='deviations', linewidth=1.5, color='blue')
+    
+    num_points = len(deviations)
+    plt.xticks(np.arange(0, num_points, step=1))  
+    height = max(abs(np.min(deviations)), abs(np.max(deviations)))
+    plt.yticks(np.arange(-height-0.1, height+0.1, 0.1))
+    plt.grid(True, which='both', linestyle='--', linewidth=0.7)
+    plt.gca().axhline(0, color='black', linewidth=1.0)  
+    plt.tick_params(axis='both', labelsize=5)
+    plt.show() if filepath is None else plt.savefig(filepath, bbox_inches='tight')    
+
+
+def plot_combiner_weights(weights_history, filepath=None):
+    plt.figure(figsize=(20, 10))
+    for i in range(weights_history.shape[0]):
+        plt.plot(weights_history[i,:], label=f'Component {i}')
+    plt.title('Combiner Component Weights')
+    plt.ylabel("Weights")
     plt.xlabel("Time")
-    plt.ylabel("Value")
     plt.legend()    
-    plt.grid(True)
-    if filepath is None:
-        plt.show()
-    else:
-        plt.savefig(filepath, bbox_inches='tight')
 
+    plt.xticks(np.arange(0, weights_history.shape[1], step=1)) 
+    plt.yticks(np.arange(0, 1, 0.05))
+    plt.grid(True, which='both', linestyle='--', linewidth=0.7)
+    plt.gca().axhline(0.5, color='black', linewidth=1.0)  
+    plt.tick_params(axis='both', labelsize=5)
+
+    plt.show() if filepath is None else plt.savefig(filepath, bbox_inches='tight')
 
 
 def plot_gpmodel(gpm, plot_observed_data=True, plot_predictions=True, n_test=500, x_range=None, filepath=None):

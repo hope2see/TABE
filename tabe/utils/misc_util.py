@@ -102,10 +102,10 @@ def print_configs(configs):
     # logger.info(f'  {"Task Name:":<20}{configs.task_name:<20}{"Is Training:":<20}{configs.is_training:<20}')
     logger.info('')
 
-    logger.info(f"\033[1m" + "Adjuster" + "\033[0m")
-    logger.info(f'  {"gpm_lookback_win:":<20}{configs.gpm_lookback_win:<20}{"max_gp_opt_steps:":<20}{configs.max_gp_opt_steps}')
-    logger.info(f'  {"gpm_kernel:":<20}{configs.gpm_kernel:<20}{"gpm_noise:":<20}{configs.gpm_noise}')
+    logger.info(f"\033[1m" + f"Adjuster [model={configs.adj_model}]" + "\033[0m")
     logger.info(f'  {"Adjuster args:":<12}{_args_to_str(configs.adjuster):<20}')
+    # logger.info(f'  {"gpm_lookback_win:":<20}{configs.gpm_lookback_win:<20}{"max_gp_opt_steps:":<20}{configs.max_gp_opt_steps}')
+    # logger.info(f'  {"gpm_kernel:":<20}{configs.gpm_kernel:<20}{"gpm_noise:":<20}{configs.gpm_noise}')
     logger.info('')
 
     logger.info(f"\033[1m" + "Combiner" + "\033[0m")

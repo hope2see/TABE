@@ -108,7 +108,6 @@ def _get_parser(model_name=None):
                             help='The threshold of model\'s estimated probability for the predicted_return to be over buy_threshold_ret [0.0 ~ 1.0]')
 
         # forecasting task
-        parser.add_argument('--seq_len', type=int, default=96, help='input sequence length')
         parser.add_argument('--label_len', type=int, default=96, help='start token length')
         parser.add_argument('--pred_len', type=int, default=1, help='prediction sequence length')
         parser.add_argument('--inverse', action='store_true', help='inverse output data', default=True)
@@ -164,6 +163,9 @@ def _get_parser(model_name=None):
                             help="arguments for the adjuster model [--option1 val1 ...]")
 
     # Addable / Overidable by the model arguments ---------------------
+
+    # seq_len (aka. context_len or lookback_win) of input (X) 
+    parser.add_argument('--seq_len', type=int, default=96, help='input sequence length')
 
     # optimization
     parser.add_argument('--num_workers', type=int, default=1, help='data loader num workers')
@@ -261,10 +263,12 @@ def _get_parser(model_name=None):
     parser.add_argument('--use_batch_norm', type=bool, default=False)
 
     # Adjuster
-    parser.add_argument('--adjuster_model', type=str, default='none', help='model used to adjust combiner\'s prediction. [none, gpm, moe]')
-    parser.add_argument('--gpm_lookback_win', type=int, default=10, 
-                        help="lookback window size for evaluating gaussian process model in the Adjuster [10 ~ 50]"
-                            "When 'adpative_hpo' applied, gpm_lookback_win is adpatively changed")
+    parser.add_argument('--adj_model', type=str, default='moe', help='model used to adjust combiner\'s prediction. [gpm, moe]')
+    # parser.add_argument('--adj_lookback_win', type=int, default=10, 
+    #                     help="window size for the past predictions of combiner [5 ~ 50]"
+    #                         "When 'adpative_hpo' applied, adj_lookback_win is adpatively changed")
+    parser.add_argument('--adj_stat_win', type=int, default=50, 
+                        help="window size for computing probabilistic statistics (larger than seq_len)")
     parser.add_argument('--gpm_kernel', type=str, default='Matern32', help='kernel of Gaussian Process [RBF, Matern32, Matern52, Linear, Brownian]')
     parser.add_argument('--gpm_noise', type=float, default=0.1, help='noise for Gaussian Process Kernel [0.0~]')
     parser.add_argument('--max_gp_opt_steps', type=int, default=5000, 
@@ -355,9 +359,11 @@ def _create_base_model(configs, device, model_name) -> AbstractModel:
 
 def _report_results(configs, result_dir, tabe, combiner, basemodels):
 
-    test_set = tabe.dataset    
+    test_set = tabe.dataset  
     truths = test_set.data_y[-len(test_set):, -1]
     truths = truths[1:] # truths[0] is the thuth of the time step just before testing
+    len_result = len(truths)
+    
     tabe_preds = tabe.predictions[:-1] # exclude the last one, which does not have corresponding truth
     cbm_preds = combiner.predictions[:-1]
     bsm_preds = [bm.predictions[:-1] for bm in basemodels]    
@@ -365,9 +371,9 @@ def _report_results(configs, result_dir, tabe, combiner, basemodels):
     need_to_invert_data = True if test_set.scale else False
     if need_to_invert_data:            
         n_features = test_set.data_y.shape[1]
-        data_truths = np.zeros((len(truths), n_features))
-        data_tabe_preds = np.zeros((len(truths), n_features))
-        data_cbm_preds = np.zeros((len(truths), n_features))
+        data_truths = np.zeros((len_result, n_features))
+        data_tabe_preds = np.zeros((len_result, n_features))
+        data_cbm_preds = np.zeros((len_result, n_features))
         data_truths[:, -1] = truths
         data_tabe_preds[:, -1] = tabe_preds
         data_cbm_preds[:, -1] = cbm_preds
@@ -375,18 +381,24 @@ def _report_results(configs, result_dir, tabe, combiner, basemodels):
         tabe_preds = test_set.inverse_transform(data_tabe_preds)[:, -1]
         cbm_preds = test_set.inverse_transform(data_cbm_preds)[:, -1]
         for i in range(len(bsm_preds)):
-            data_bsm_preds = np.zeros((len(truths), n_features))
+            data_bsm_preds = np.zeros((len_result, n_features))
             data_bsm_preds[:, -1] = bsm_preds[i]
             bsm_preds[i] = test_set.inverse_transform(data_bsm_preds)[:, -1]
 
     report.report_losses(truths, tabe_preds, cbm_preds, bsm_preds, basemodels)
-
-    # report.report_losses2(tabe, combiner, basemodels)
-
-    report.plot_forecast_result(truths, tabe_preds,  None, None, cbm_preds, bsm_preds, basemodels,
-                        filepath = result_dir + "/models_forecast_comparison.pdf")
-
     report.report_classifier_performance(truths, tabe_preds, cbm_preds, bsm_preds, basemodels)
+
+    report.plot_forecasts_with_deviations(truths, tabe_preds,  cbm_preds, 
+                                        bsm_preds, [bm.name for bm in basemodels], 
+                                        tabe.adjuster.adj_deviations[-len_result:], tabe.adjuster.cbm_deviations[-len_result:],
+                                        filepath = result_dir + "/models_forecast_comparison.pdf")
+
+    # report.plot_forecast_result(truths, tabe_preds,  None, None, cbm_preds, bsm_preds, basemodels,
+    #                         filepath = result_dir + "/models_forecast_comparison.pdf")
+    # report.plot_deviations_over_time(tabe.adjuster.cbm_deviations[-len_result:], 
+    #                                  filepath = result_dir + "/combiner_deviations_over_time.pdf")
+    report.plot_combiner_weights(tabe.combiner.weights_history, 
+                                 filepath = result_dir + "/combiner_bm_weights.pdf")
 
     # save forecast result
     df_fcst_result = pd.DataFrame() 
@@ -433,7 +445,7 @@ def _report_results(configs, result_dir, tabe, combiner, basemodels):
                 df_sim_result.index = ['Acc. ROI', 'Mean ROI', '# Trades', '# Win_Trades', 'Winning Rate']
                 report.report_trading_simulation(df_sim_result, 
                                                  strategy+'_prob' if apply_threshold_prob else strategy, 
-                                                 len(truths))
+                                                 len_result)
     else:
         logger.warning(f"Trading simulation for target {target} is not supported now.")
 
@@ -495,19 +507,17 @@ def create_tabe(args):
         combiner_configs.__dict__.update(configs.combiner.__dict__) # add/update with model-specific arguments
     combinerModel = CombinerModel(combiner_configs, device, basemodels)
 
-    if configs.adjuster_model == 'none':
+    if configs.adjuster is None:
         adjusterModel = None
     else:
-        adjuster_configs = configs
-        if configs.adjuster is not None:
-            adjuster_configs = copy.deepcopy(configs)
-            adjuster_configs.__dict__.update(configs.adjuster.__dict__) # add/update with model-specific arguments
-        if configs.adjuster_model == 'moe':            
+        adjuster_configs = copy.deepcopy(configs)
+        adjuster_configs.__dict__.update(configs.adjuster.__dict__) # add/update with model-specific arguments
+        if configs.adj_model == 'moe':            
             adjusterModel = TimeMoeAdjuster(adjuster_configs, device)
-        elif configs.adjuster_model == 'gpm':            
+        elif configs.adj == 'gpm':            
             adjusterModel = GpmAdjuster(adjuster_configs)
         else:
-            raise ValueError(f"Model {configs.adjuster_model} is not supported as an Adjuster model")
+            raise ValueError(f"Model {configs.adj_model} is not supported as an Adjuster model")
 
     tabeModel = TabeModel(configs, device, combinerModel, adjusterModel)
     return tabeModel, combinerModel, basemodels, result_dir
