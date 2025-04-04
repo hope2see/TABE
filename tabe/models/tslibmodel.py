@@ -22,9 +22,9 @@ warnings.filterwarnings('ignore')
 
 # Written by referencing Time-Series-Library/exp_longterm_forecasting.py,exp_basic.py
 class TSLibModel(AbstractModel):
-    def __init__(self, configs, device, name, model):
-        super().__init__(configs, device, name)
-        self.model = self._build_model(model).to(self.device)
+    def __init__(self, configs, name, model):
+        super().__init__(configs, name)
+        self.model = self._build_model(model).to(configs.device)
         self.early_stopping = None
 
     def _build_model(self, model):
@@ -43,17 +43,18 @@ class TSLibModel(AbstractModel):
         self.model.load_state_dict(torch.load(path))
 
     def _forward_onestep(self, batch_x, batch_y, batch_x_mark, batch_y_mark):
-        batch_x = batch_x.float().to(self.device)
+        device = self.configs.device
+        batch_x = batch_x.float().to(device)
         n_batch, n_vars = batch_y.shape[0], batch_y.shape[2] 
-        batch_y = batch_y.float().to(self.device)
-        batch_x_mark = batch_x_mark.float().to(self.device)
-        batch_y_mark = batch_y_mark.float().to(self.device)
+        batch_y = batch_y.float().to(device)
+        batch_x_mark = batch_x_mark.float().to(device)
+        batch_y_mark = batch_y_mark.float().to(device)
 
         if self.configs.channel_mixup:
-            perm = torch.randperm(n_vars, device=self.device, dtype=torch.int32)
+            perm = torch.randperm(n_vars, device=device, dtype=torch.int32)
             # NOTE: 'mps' device raises an error when using 'torch.normal' function.
             mix_up = torch.normal(mean=0, std=self.configs.sigma, size=(n_batch, n_vars), 
-                                  device=self.device, dtype=torch.float32).unsqueeze(-2)
+                                  device=device, dtype=torch.float32).unsqueeze(-2)
             batch_x = batch_x + batch_x[:, :, perm] * mix_up
             batch_y = batch_y + batch_y[:, :, perm] * mix_up
 
@@ -62,7 +63,7 @@ class TSLibModel(AbstractModel):
                 or (batch_y.shape[1] == self.configs.label_len)        
         assert self.configs.label_len >= self.configs.pred_len 
         dec_inp = torch.zeros_like(batch_y[:, -self.configs.pred_len:, :]).float()
-        dec_inp = torch.cat([batch_y[:, :self.configs.label_len, :], dec_inp], dim=1).float().to(self.device)
+        dec_inp = torch.cat([batch_y[:, :self.configs.label_len, :], dec_inp], dim=1).float().to(device)
 
         # encoder - decoder
         if self.configs.use_amp:
@@ -94,18 +95,9 @@ class TSLibModel(AbstractModel):
                     or, (batch_size, label_len, num_features)
         """
         f_dim = -1 if self.configs.features == 'MS' else 0
-        batch_y = batch_y[:, -self.configs.pred_len:, f_dim:].to(self.device)
+        batch_y = batch_y[:, -self.configs.pred_len:, f_dim:].to(self.configs.device)
         loss = self.criterion(outputs, batch_y)
         return loss 
-
-
-    # # TODO : How to effectively/efficiently train with the added one data point? 
-    # def proceed_onestep(self, batch_x, batch_y, batch_x_mark, batch_y_mark):
-    #     pred, loss = super().proceed_onestep(batch_x, batch_y, batch_x_mark, batch_y_mark)
-    #     # self.model.eval()
-    #     # pred, loss = super().proceed_onestep(batch_x, batch_y, batch_x_mark, batch_y_mark)
-    #     # self._train_batch_with_validation(batch_x, batch_y, batch_x_mark, batch_y_mark)
-    #     return pred, loss
 
 
     # # NOTE 
@@ -229,17 +221,18 @@ class TSLibModel(AbstractModel):
     def _validate(self, vali_data, vali_loader):
         total_loss = []
         self.model.eval()
+        device = self.configs.device
         with torch.no_grad():
             for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(vali_loader):
-                batch_x = batch_x.float().to(self.device)
+                batch_x = batch_x.float().to(device)
                 batch_y = batch_y.float()
 
-                batch_x_mark = batch_x_mark.float().to(self.device)
-                batch_y_mark = batch_y_mark.float().to(self.device)
+                batch_x_mark = batch_x_mark.float().to(device)
+                batch_y_mark = batch_y_mark.float().to(device)
 
                 # decoder input
                 dec_inp = torch.zeros_like(batch_y[:, -self.configs.pred_len:, :]).float()
-                dec_inp = torch.cat([batch_y[:, :self.configs.label_len, :], dec_inp], dim=1).float().to(self.device)
+                dec_inp = torch.cat([batch_y[:, :self.configs.label_len, :], dec_inp], dim=1).float().to(device)
                 # encoder - decoder
                 if self.configs.use_amp:
                     with torch.cuda.amp.autocast():
@@ -248,7 +241,7 @@ class TSLibModel(AbstractModel):
                     outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                 f_dim = -1 if self.configs.features == 'MS' else 0
                 outputs = outputs[:, -self.configs.pred_len:, f_dim:]
-                batch_y = batch_y[:, -self.configs.pred_len:, f_dim:].to(self.device)
+                batch_y = batch_y[:, -self.configs.pred_len:, f_dim:].to(device)
 
                 pred = outputs.detach().cpu()
                 true = batch_y.detach().cpu()

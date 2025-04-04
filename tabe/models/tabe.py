@@ -26,8 +26,8 @@ _mem_util = MemUtil(rss_mem=False, python_mem=False)
 
 class TabeModel(AbstractModel):
 
-    def __init__(self, configs, device, combiner_model, adjuster_model=None):
-        super().__init__(configs, device, "Tabe")
+    def __init__(self, configs, combiner_model, adjuster_model=None):
+        super().__init__(configs, "Tabe")
         self.combiner = combiner_model # must've been trained already
         self.adjuster = adjuster_model # Model used to adjust. TimeMoE
 
@@ -51,30 +51,29 @@ class TabeModel(AbstractModel):
             batch_list[i] = torch.from_numpy(scaled_batch_np).unsqueeze(0)
         return batch_list
 
+
     def prepare_result_storage(self, total_steps=None):
         super().prepare_result_storage(total_steps)
         self.combiner.prepare_result_storage(total_steps)
 
+
     def train(self, esb_train_dataset=None, esm_train_loader=None):
         self.combiner.train()
 
-        if esb_train_dataset is None :
-            esb_train_dataset, esm_train_loader = get_data_provider(self.configs, flag='ensemble_train', step_by_step=True)
+        # if esb_train_dataset is None :
+        #     esb_train_dataset, esm_train_loader = get_data_provider(self.configs, flag='ensemble_train', step_by_step=True)
 
-        self.combiner.prepare_result_storage(len(esb_train_dataset)) 
+        # self.combiner.prepare_result_storage(len(esb_train_dataset)) 
 
-        for t, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(esm_train_loader):
-            # batch_x, batch_y, batch_x_mark, batch_y_mark = \
-            #     self._normalize_batch([batch_x, batch_y, batch_x_mark, batch_y_mark], inverse=False)
-            self.combiner.proceed_onestep(batch_x, batch_y, batch_x_mark, batch_y_mark)
-            # batch_x, batch_y, batch_x_mark, batch_y_mark = \
-            #     self._normalize_batch([batch_x, batch_y, batch_x_mark, batch_y_mark], inverse=True)
+        # for t, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(esm_train_loader):
+        #     # batch_x, batch_y, batch_x_mark, batch_y_mark = \
+        #     #     self._normalize_batch([batch_x, batch_y, batch_x_mark, batch_y_mark], inverse=False)
+        #     self.combiner.proceed_onestep(batch_x, batch_y, batch_x_mark, batch_y_mark)
+        #     # batch_x, batch_y, batch_x_mark, batch_y_mark = \
+        #     #     self._normalize_batch([batch_x, batch_y, batch_x_mark, batch_y_mark], inverse=True)
 
-        truths = esb_train_dataset.data_y[-len(esb_train_dataset):, -1] 
-        cbm_preds = self.combiner.predictions
-
-        if self.adjuster is not None:
-            self.adjuster.train(truths, cbm_preds)
+        # if self.adjuster is not None:
+        #     self.adjuster.train(esb_train_dataset.get_labels())
 
 
     def _forward_onestep(self, batch_x, batch_y, batch_x_mark, batch_y_mark):
@@ -85,7 +84,7 @@ class TabeModel(AbstractModel):
         #     batch_x, batch_y, batch_x_mark, batch_y_mark = \
         #         self._normalize_batch([batch_x, batch_y, batch_x_mark, batch_y_mark], inverse=False)
             
-        cbm_pred, _ = self.combiner.proceed_onestep(
+        cbm_pred, _, _ = self.combiner.proceed_onestep(
             batch_x, batch_y, batch_x_mark, batch_y_mark)
 
         # if self.use_scaler:
@@ -114,15 +113,6 @@ class TabeModel(AbstractModel):
         # 'self.dataset' is used when result reporting 
         self.dataset = test_set
 
-        # TODO : check if dev_stddev is correctly used? 
-        # z_val = norm.ppf(self.configs.quantile) 
-        # y_hat_q_low = y_hat - devi_stddev * z_val 
-        # y_hat_q_high = y_hat + devi_stddev * z_val
-
-        # # TODO : check if dev_stddev is correctly used? 
-        # z_val = norm.ppf(self.configs.buy_threshold_prob) 
-        # buy_threshold_q = y_hat - devi_stddev * z_val
-
 
     #===========================================================================
     # Interface for training/testing with 'live' data (fed on-the-fly)
@@ -139,13 +129,10 @@ class TabeModel(AbstractModel):
         batch_y = torch.tensor(batch_y).unsqueeze(0)
         batch_x_mark = torch.tensor(batch_x_mark).unsqueeze(0)
         batch_y_mark = torch.tensor(batch_y_mark).unsqueeze(0)
-        fcst, _ = \
-            self.proceed_onestep(batch_x, batch_y, batch_x_mark, batch_y_mark)            
+        fcst, _, _ = self.proceed_onestep(batch_x, batch_y, batch_x_mark, batch_y_mark)            
 
         if self.dataset.scale:
-            data_tf = np.zeros((1, self.dataset.data_y.shape[1]))
-            data_tf[:, -1] = fcst
-            fcst = self.dataset.inverse_transform(data_tf)[0, -1]
+            fcst = self.dataset.inverse_transform(np.array([fcst]))[0]
 
         return fcst, None, None
     

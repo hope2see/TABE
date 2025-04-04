@@ -13,9 +13,8 @@ _mem_util = MemUtil(rss_mem=False, python_mem=False)
 class TimeMoE(AbstractModel):
     MAX_CONTEXT_LEN = 4096 # limitation of TimeMoE architecture
 
-    def __init__(self, configs, device, name='TimeMoE', ds_size='large'):
-        super().__init__(configs, device, name)
-        self.device = device
+    def __init__(self, configs, name='TimeMoE', ds_size='large'):
+        super().__init__(configs, name)
         model_path = \
             'Maple728/TimeMoE-50M' if ds_size == 'base' else  \
             'Maple728/TimeMoE-200M' if ds_size == 'large' else \
@@ -25,7 +24,7 @@ class TimeMoE(AbstractModel):
             from time_moe.models.modeling_time_moe import TimeMoeForPrediction
             model = TimeMoeForPrediction.from_pretrained(
                 model_path,
-                device_map=device,
+                device_map=configs.device,
                 # attn_implementation='flash_attention_2',
                 torch_dtype='auto',
             )
@@ -33,7 +32,7 @@ class TimeMoE(AbstractModel):
             logger.info('Got exception during creating TimeMoeForPrediction!, So use AutoModelForCausalLM instead.')
             model = AutoModelForCausalLM.from_pretrained(
                 model_path,
-                device_map=device,
+                device_map=configs.device,
                 # attn_implementation='flash_attention_2',
                 torch_dtype='auto',
                 trust_remote_code=True,
@@ -42,7 +41,6 @@ class TimeMoE(AbstractModel):
         logger.info(f'>>> Model dtype: {model.dtype}; Attention:{model.config._attn_implementation}')
 
         self.model = model
-        self.device = device
         self.model.eval()
 
 
@@ -80,7 +78,7 @@ class TimeMoE(AbstractModel):
         batch_x = batch_x[:, :, -1] # target feature only
         
         outputs = self.model.generate(
-            inputs=batch_x.to(self.device).to(self.model.dtype),
+            inputs=batch_x.to(self.configs.device).to(self.model.dtype),
             max_new_tokens=1, # prediction_length
         )
 
@@ -100,7 +98,7 @@ class TimeMoE(AbstractModel):
 
         # output = self.model.generate(torch.tensor([normed_seqs], dtype=self.moe.model.dtype), 
         #                              max_new_tokens=pred_len)  
-        output = self.model.generate(torch.tensor([normed_seqs], device=self.device, dtype=self.model.dtype), 
+        output = self.model.generate(torch.tensor([normed_seqs], device=self.configs.device, dtype=self.model.dtype), 
                                      max_new_tokens=1)  
         normed_prediction = output[-1, -1]  
 

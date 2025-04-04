@@ -50,15 +50,15 @@ class CombinerModel(AbstractModel):
     HPO_PERIOD = MAX_LOOKBACK_WIN + HPO_EVAL_PEROID
 
 
-    def __init__(self, configs, device, basemodels):
-        super().__init__(configs, device, "Combiner")
+    def __init__(self, configs, basemodels):
+        super().__init__(configs, "Combiner")
 
         self.basemodels = basemodels
         self.basemodel_weights = np.array([1/len(basemodels)] * len(basemodels)) # initially, weights are evenly distributed.
         self.basemodel_losses = None # the last basemodel_losses. Shape = (len(basemodels), HPO_EVALUATION_PEROID)
         self.truths = None # the last 'y' values. Shape = (HPO_EVALUATION_PEROID)
         self.weights_history = None
-        self.hpo_policy = self.configs.hpo_policy        
+        self.hpo_policy = self.configs.hpo_policy
 
         self.hp_dict = { # initial setting of HP
             'lookback_window':self.configs.lookback_win, # for weighting 
@@ -211,7 +211,7 @@ class CombinerModel(AbstractModel):
         bm_losses = np.empty((len(self.basemodels), 1))
 
         for m, basemodel in enumerate(self.basemodels):
-            bm_preds[m], bm_losses[m, 0] = basemodel.proceed_onestep(
+            bm_preds[m], bm_losses[m, 0], _ = basemodel.proceed_onestep(
                 batch_x, batch_y, batch_x_mark, batch_y_mark) 
 
         if self._in_first_step():

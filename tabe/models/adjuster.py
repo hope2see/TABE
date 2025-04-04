@@ -32,20 +32,17 @@ _mem_util = MemUtil(rss_mem=False, python_mem=False)
 
 class AdjusterModel(AbstractModel):
 
-    def __init__(self, configs, device, name='Adjuster'):
-        super().__init__(configs, device, name)
-        self.cbm_deviations = None # TODO : keep only necessary length
+    def __init__(self, configs, combiner, name='Adjuster'):
+        super().__init__(configs, name)
+        self.combiner = combiner
         self.adj_deviations = None # TODO : keep only necessary length
         self.prev_cbm_pred = None
         self.prev_adj_pred = None
         self.use_adjuster_credibility = False
         self.weights = np.array([0.5,0.5]) # [adjuster_weight, combiner_weight]        
-        # self.adj_stat_win = max(configs.adj_stat_win, configs.seq_len)
-        # self.cbm_devi_stat = None # (mean, std) of cbm_deviations
-        # self.adj_devi_stat = None # (mean, std) of adj_deviations
     
 
-    def _do_train(self, truths, cbm_preds):
+    def _do_train(self):
         raise NotImplementedError
 
 
@@ -53,41 +50,23 @@ class AdjusterModel(AbstractModel):
         raise NotImplementedError
 
 
-    def train(self, truths, cbm_preds):
-        assert len(truths) == len(cbm_preds)
-        # 'truths' is 1 step behind cbmP_preds. 
-        # So, by shifting truths 1 step left, make truths[t] be the truth of cbm_preds[t].
-        # Now, truths is 1-step less than cbm_preds. 
-        # It is natural, because we don't know the truth corresponding tor the last cbm_pred
-        # self.truths = truths[1:]
-        # self.cbm_preds = cbm_preds 
-        self.cbm_deviations = truths[1:] - cbm_preds[:-1]
-        adj_preds = self._do_train(cbm_preds)
-        self.adj_deviations = truths[1:] - adj_preds[:-1]
-        self.prev_cbm_pred = cbm_preds[-1]
-        self.prev_adj_pred = adj_preds[-1]
-
-        # if len(self.cbm_deviations) > self.adj_stat_win:
-        #     self.cbm_deviations = self.cbm_deviations[-self.adj_stat_win:]
-        #     self.adj_deviations = self.adj_deviations[-self.adj_stat_win:]
-        # self.cbm_devi_stat = (self.cbm_deviations.mean(), self.cbm_deviations.std())
-        # self.adj_devi_stat = (self.adj_deviations.mean(), self.adj_deviations.std())
+    def train(self, truths):        
+        self.adj_preds, self.cur_prediction = self._do_train()
+        self.adj_deviations = truths - self.adj_preds
 
 
     def adjust_onestep(self, truth, cbm_pred):
-        # truth is the target value at one step just before the given cbm_pred.
-        cbm_devi = truth - self.prev_cbm_pred
-        self.cbm_deviations = np.concatenate((self.cbm_deviations, np.array([cbm_devi])))
-        adj_devi = truth - self.prev_adj_pred
+        adj_devi = truth - self.cur_prediction        
         self.adj_deviations = np.concatenate((self.adj_deviations, np.array([adj_devi])))
+        self.adj_preds = np.concatenate((self.adj_preds, np.array([self.cur_prediction])))
 
         pred = cbm_pred + self._predict_deviation().item()
 
         if self.use_adjuster_credibility : 
-            eval_period = min(len(self.cbm_deviations), self.configs.lookback_win+1)
+            eval_period = min(len(self.combiner.deviations), self.configs.lookback_win+1)
             if eval_period > 0:
                 my_loss = np.abs(self.adj_deviations[-eval_period:])
-                cbm_loss = np.abs(self.cbm_deviations[-eval_period:])
+                cbm_loss = np.abs(self.combiner.deviations[-eval_period:])
                 model_losses = np.array([my_loss, cbm_loss])
                 self.weights = weighting.compute_model_weights(model_losses, self.weights, 
                                         lookback_window=eval_period, 
@@ -103,45 +82,41 @@ class AdjusterModel(AbstractModel):
             pred = pred * self.weights[0] + cbm_pred + self.weights[1]
             # logger.info(f'Adj.predict : final_pred={final_pred:.5f}, y_hat={y_hat:.5f}, y_hat_cbm={y_hat_cbm:.5f}')
 
-        self.prev_cbm_pred = cbm_pred
-        self.prev_adj_pred = pred
-
-        # if len(self.cbm_deviations) > self.adj_stat_win:
-        #     self.cbm_deviations = self.cbm_deviations[-self.adj_stat_win:]
-        #     self.adj_deviations = self.adj_deviations[-self.adj_stat_win:]
-        # self.cbm_devi_stat = (self.cbm_deviations.mean(), self.cbm_deviations.std())
-        # self.adj_devi_stat = (self.adj_deviations.mean(), self.adj_deviations.std())
+        self.cur_prediction = pred
         
         return pred
 
 
 class TimeMoeAdjuster(AdjusterModel):
 
-    def __init__(self, configs, device):
-        super().__init__(configs, device, 'TimeMoeAdjuster')
+    def __init__(self, configs, device, combiner):
+        super().__init__(configs, device, combiner, 'TimeMoeAdjuster')
         self.moe = TimeMoE(configs, device)
-        self.LOOKBACK_WIN = configs.seq_len
+        self.LOOKBACK_WIN = configs.lookback_win
 
     def _predict_deviation(self, cbm_deviations=None, user_param=None):
         if cbm_deviations is None :
-            cbm_deviations = self.cbm_deviations
+            cbm_deviations = self.combiner.deviations
         assert len(cbm_deviations) >= self.LOOKBACK_WIN
         exp_deviation = self.moe.predict(cbm_deviations, context_len=self.LOOKBACK_WIN)
         return exp_deviation
 
-    def _do_train(self, cbm_preds):
+    def _do_train(self):
         # TODO : Fine-tune model ! 
 
-        preds = np.empty_like(cbm_preds)
-        for t in range(0, len(cbm_preds)):
+        preds = np.empty_like(self.combiner.predictions)
+        for t in range(0, len(preds)):
             if t < self.LOOKBACK_WIN: 
-                preds[t] = cbm_preds[t]
+                preds[t] = self.combiner.predictions[t]
             else:
-                # TODO : Avoid copying data 
-                exp_deviation = self._predict_deviation(self.cbm_deviations[:t])
-                preds[t] = cbm_preds[t] + exp_deviation.item()
+                exp_deviation = self._predict_deviation(self.combiner.deviations[t-self.LOOKBACK_WIN : t])
+                preds[t] = self.combiner.predictions[t] + exp_deviation.item()
 
-        return preds
+        t += 1
+        exp_deviation = self._predict_deviation(self.combiner.deviations[t-self.LOOKBACK_WIN : t])
+        cur_pred = self.combiner.cur_prediction + exp_deviation.item()
+
+        return preds, cur_pred
     
 
 

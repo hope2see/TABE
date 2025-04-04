@@ -4,6 +4,7 @@
 # sys.path.append('Time-Series-Library')
 
 import os 
+from datetime import datetime
 import argparse
 import copy
 import numpy as np
@@ -30,10 +31,9 @@ from tabe.models.combiner import CombinerModel
 from tabe.models.adjuster import AdjusterModel, TimeMoeAdjuster #, GpmAdjuster
 from tabe.models.tabe import TabeModel
 from tabe.utils.mem_util import MemUtil
-import tabe.utils.report as report
-from tabe.utils.misc_util import set_experiment_sig, experiment_sig, print_configs
+from tabe.utils.report import report_results
+from tabe.utils.misc_util import print_configs
 from tabe.utils.logger import logger, default_formatter
-from tabe.utils.trade_sim import simulate_trading
 
 
 _mem_util = MemUtil(rss_mem=True, python_mem=True)
@@ -259,16 +259,11 @@ def _get_parser(model_name=None):
     parser.add_argument('--smoothing_factor', type=float, default=0.0, help="")
     parser.add_argument('--max_models', type=float, default=0.0, help="")
     
-    # batch-normalization
-    parser.add_argument('--use_batch_norm', type=bool, default=False)
-
     # Adjuster
     parser.add_argument('--adj_model', type=str, default='moe', help='model used to adjust combiner\'s prediction. [gpm, moe]')
     # parser.add_argument('--adj_lookback_win', type=int, default=10, 
     #                     help="window size for the past predictions of combiner [5 ~ 50]"
     #                         "When 'adpative_hpo' applied, adj_lookback_win is adpatively changed")
-    parser.add_argument('--adj_stat_win', type=int, default=50, 
-                        help="window size for computing probabilistic statistics (larger than seq_len)")
     parser.add_argument('--gpm_kernel', type=str, default='Matern32', help='kernel of Gaussian Process [RBF, Matern32, Matern52, Linear, Brownian]')
     parser.add_argument('--gpm_noise', type=float, default=0.1, help='noise for Gaussian Process Kernel [0.0~]')
     parser.add_argument('--max_gp_opt_steps', type=int, default=5000, 
@@ -277,6 +272,12 @@ def _get_parser(model_name=None):
                         help="max patience in the optimization steps without improvement [default: 30]")
     parser.add_argument('--quantile', type=float, default=0.975, 
                         help="quantile level for the probabilistic prediction in the Adjuster [default: 0.975]")
+
+    # Etc 
+    parser.add_argument('--use_batch_norm', type=bool, default=False)
+    parser.add_argument('--prob_stat_win', type=int, default=50, 
+                        help="window size for computing probabilistic statistics (larger than seq_len)")
+
 
     # If model_name is given, then all the default arguments are suppressed, and only explicitly given arguments are included
     if model_name is not None:
@@ -289,42 +290,28 @@ def _get_parser(model_name=None):
 
 def _set_device_configs(configs):
     if configs.use_gpu and torch.cuda.is_available():
+        configs.gpu_type = 'cuda'
+        if configs.use_multi_gpu:
+            configs.devices = configs.devices.replace(' ', '')
+            device_ids = configs.devices.split(',')
+            configs.device_ids = [int(id_) for id_ in device_ids]
+            configs.gpu = configs.device_ids[0]
         configs.device = torch.device('cuda:{}'.format(configs.gpu))
-        configs.gpu_type = 'cuda' # by default
-        logger.info('configured to use GPU')
-    # MPS is not fully supported. It causes error in CMamba (and probably in TimeMoE)
-    # elif configs.use_gpu and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-    #     configs.device = torch.device("mps")
-    #     configs.gpu_type = 'mps' # If not set, it causes an error in Exp_Basic._acquire_device()
-    #     logger.info('Using mps')
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(configs.gpu) if not configs.use_multi_gpu else configs.devices
+        logger.info('Use GPU: cuda:{}'.format(configs.gpu))
+    elif configs.use_gpu and configs.gpu_type == 'mps' \
+        and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        # MPS is not fully supported. It causes error in CMamba (and probably in TimeMoE)
+        configs.gpu_type = 'mps' # If not set, it causes an error in Exp_Basic._acquire_device()
+        configs.device = torch.device("mps")
+        logger.info('Use GPU: mps')
     else:
         configs.use_gpu = False
         configs.device = torch.device("cpu")
-        logger.info('configured to use CPU')
-
-    if configs.use_gpu and configs.use_multi_gpu:
-        configs.devices = configs.devices.replace(' ', '')
-        device_ids = configs.devices.split(',')
-        configs.device_ids = [int(id_) for id_ in device_ids]
-        configs.gpu = configs.device_ids[0]
-
-
-def _acquire_device(configs):
-    if configs.use_gpu and configs.gpu_type == 'cuda':
-        os.environ["CUDA_VISIBLE_DEVICES"] = \
-            str(configs.gpu) if not configs.use_multi_gpu else configs.devices
-        device = torch.device('cuda:{}'.format(configs.gpu))
-        logger.info('Use GPU: cuda:{}'.format(configs.gpu))
-    elif configs.use_gpu and configs.gpu_type == 'mps':
-        device = torch.device('mps')
-        logger.info('Use GPU: mps')
-    else:
-        device = torch.device('cpu')
         logger.info('Use CPU')
-    return device
 
 
-def _create_base_model(configs, device, model_name) -> AbstractModel:
+def _create_base_model(configs, model_name) -> AbstractModel:
     tslib_models = { # models in Time-Series-Library
         # 'TimesNet': TimesNet,
         'DLinear': DLinear,
@@ -349,105 +336,12 @@ def _create_base_model(configs, device, model_name) -> AbstractModel:
     }
 
     if model_name in tslib_models:
-        model = TSLibModel(configs, device, model_name, tslib_models[model_name])
+        model = TSLibModel(configs, model_name, tslib_models[model_name])
     elif model_name in other_models:
-        model = other_models[model_name](configs, device, model_name)
+        model = other_models[model_name](configs, model_name)
     else:
         raise ValueError(f"Model {model_name} is not supported.")
     return model
-
-
-def _report_results(configs, result_dir, tabe, combiner, basemodels):
-
-    test_set = tabe.dataset  
-    truths = test_set.data_y[-len(test_set):, -1]
-    truths = truths[1:] # truths[0] is the thuth of the time step just before testing
-    len_result = len(truths)
-    
-    tabe_preds = tabe.predictions[:-1] # exclude the last one, which does not have corresponding truth
-    cbm_preds = combiner.predictions[:-1]
-    bsm_preds = [bm.predictions[:-1] for bm in basemodels]    
-
-    need_to_invert_data = True if test_set.scale else False
-    if need_to_invert_data:            
-        n_features = test_set.data_y.shape[1]
-        data_truths = np.zeros((len_result, n_features))
-        data_tabe_preds = np.zeros((len_result, n_features))
-        data_cbm_preds = np.zeros((len_result, n_features))
-        data_truths[:, -1] = truths
-        data_tabe_preds[:, -1] = tabe_preds
-        data_cbm_preds[:, -1] = cbm_preds
-        truths = test_set.inverse_transform(data_truths)[:, -1]
-        tabe_preds = test_set.inverse_transform(data_tabe_preds)[:, -1]
-        cbm_preds = test_set.inverse_transform(data_cbm_preds)[:, -1]
-        for i in range(len(bsm_preds)):
-            data_bsm_preds = np.zeros((len_result, n_features))
-            data_bsm_preds[:, -1] = bsm_preds[i]
-            bsm_preds[i] = test_set.inverse_transform(data_bsm_preds)[:, -1]
-
-    report.report_losses(truths, tabe_preds, cbm_preds, bsm_preds, basemodels)
-    report.report_classifier_performance(truths, tabe_preds, cbm_preds, bsm_preds, basemodels)
-
-    report.plot_forecasts_with_deviations(truths, tabe_preds,  cbm_preds, 
-                                        bsm_preds, [bm.name for bm in basemodels], 
-                                        tabe.adjuster.adj_deviations[-len_result:], tabe.adjuster.cbm_deviations[-len_result:],
-                                        filepath = result_dir + "/models_forecast_comparison.pdf")
-
-    # report.plot_forecast_result(truths, tabe_preds,  None, None, cbm_preds, bsm_preds, basemodels,
-    #                         filepath = result_dir + "/models_forecast_comparison.pdf")
-    # report.plot_deviations_over_time(tabe.adjuster.cbm_deviations[-len_result:], 
-    #                                  filepath = result_dir + "/combiner_deviations_over_time.pdf")
-    report.plot_combiner_weights(tabe.combiner.weights_history, 
-                                 filepath = result_dir + "/combiner_bm_weights.pdf")
-
-    # save forecast result
-    df_fcst_result = pd.DataFrame() 
-    df_fcst_result['Truths'] = truths
-    df_fcst_result['Adjuster'] = tabe_preds
-    # df_fcst_result[f'Adjuster_q_low_{configs.quantile}'] = y_hat_q_low
-    # df_fcst_result[f'Adjuster_q_high_{configs.quantile}'] = y_hat_q_high
-    # df_fcst_result['Adjuster_devi_sd'] = devi_stddev
-    if cbm_preds is not None:
-        df_fcst_result['Combiner'] = cbm_preds
-    if bsm_preds is not None:
-        for i, bm in enumerate(basemodels):
-            df_fcst_result[bm.name] = bsm_preds[i]
-    df_fcst_result.to_csv(path_or_buf=result_dir + "/forecast_results.csv", index=False)
-
-    # Trading Simulations ---------------
-
-    target = configs.target
-    if target in ['LogRet1',]:
-        # Convert data to 'Ret'
-        truths = np.exp(truths) - 1
-        tabe_preds = np.exp(tabe_preds) - 1
-        # y_hat_q_low = np.exp(y_hat_q_low) - 1
-        if cbm_preds is not None:
-            cbm_preds = np.exp(cbm_preds) - 1
-        if bsm_preds is not None:
-            for i in range(len(bsm_preds)):
-                bsm_preds[i] = np.exp(bsm_preds[i]) - 1
-
-        # Simulation with 'Ret'
-        # for apply_threshold_prob in [False, True]:
-        for apply_threshold_prob in [False]:
-            for strategy in ['buy_and_hold', 'daily_buy_sell', 'buy_hold_sell_v1', 'buy_hold_sell_v2']:
-                df_sim_result = pd.DataFrame() 
-                df_sim_result['Tabe'] = simulate_trading(truths, tabe_preds, strategy, None, apply_threshold_prob, 
-                                                             buy_threshold=configs.buy_threshold_ret, buy_threshold_q=None, fee_rate=configs.fee_rate)
-                if cbm_preds is not None:
-                    df_sim_result['Combiner'] = simulate_trading(truths, cbm_preds, strategy, None, apply_threshold_prob,
-                                                             buy_threshold=configs.buy_threshold_ret, buy_threshold_q=None, fee_rate=configs.fee_rate)
-                if bsm_preds is not None:
-                    for i, bm in enumerate(basemodels):
-                        df_sim_result[bm.name] = simulate_trading(truths, bsm_preds[i], strategy=strategy,
-                                                             buy_threshold=configs.buy_threshold_ret, buy_threshold_q=None, fee_rate=configs.fee_rate)
-                df_sim_result.index = ['Acc. ROI', 'Mean ROI', '# Trades', '# Win_Trades', 'Winning Rate']
-                report.report_trading_simulation(df_sim_result, 
-                                                 strategy+'_prob' if apply_threshold_prob else strategy, 
-                                                 len_result)
-    else:
-        logger.warning(f"Trading simulation for target {target} is not supported now.")
 
 
 def _cleanup_gpu_cache(configs):
@@ -459,9 +353,14 @@ def _cleanup_gpu_cache(configs):
         torch.cuda.empty_cache()
 
 
-def create_tabe(args):
-    _set_seed()
+def _get_experiment_sig(configs):
+    _experiment_signature =  f"{configs.model_id}_sl{configs.seq_len}"
+    _experiment_signature += f"_ep{configs.train_epochs}_" 
+    _experiment_signature += datetime.now().strftime("%Y%m%d_%H%M%S")
+    return _experiment_signature
 
+
+def _prepare_config(args):
     configs = _get_parser().parse_args(args)
 
     assert configs.label_len == 1
@@ -473,14 +372,35 @@ def create_tabe(args):
         raise ValueError("At least one base model should be specified in the configuration.")
 
     _set_device_configs(configs)
-    set_experiment_sig(configs)
 
-    result_dir = configs.tabe_root_path + "/result/" + experiment_sig()
+    experiment_sig = _get_experiment_sig(configs)
+
+    result_dir = configs.tabe_root_path + "/result/" + experiment_sig
     if not os.path.exists(result_dir):
         os.makedirs(result_dir)
+    configs.result_dir = result_dir
+
+    checkpoints_dir = os.path.join(configs.tabe_root_path, configs.checkpoints, experiment_sig)
+    if not os.path.exists(checkpoints_dir):
+        os.makedirs(checkpoints_dir)
+    configs.checkpoints = checkpoints_dir    
+
+    return configs
+
+
+def _calculate_warm_up_length(combiner_config, adjuster_config=None):
+    length_for_combining = combiner_config.lookback_win if combiner_config.hpo_policy == 0 else CombinerModel.HPO_PERIOD
+    warm_up_length = max(combiner_config.prob_stat_win, length_for_combining)
+    if adjuster_config is not None:
+        warm_up_length = max(warm_up_length, adjuster_config.lookback_win, adjuster_config.prob_stat_win)
+    return warm_up_length
+
+
+def create_tabe(args):
+    configs = _prepare_config(args)
 
     # add file logging
-    h_file = logging.FileHandler(result_dir+'/tabe.log', mode='w')  
+    h_file = logging.FileHandler(configs.result_dir+'/tabe.log', mode='w')  
     h_file.setFormatter(default_formatter)
     h_file.setLevel(logging.DEBUG)
     logger.addHandler(h_file)
@@ -491,36 +411,43 @@ def create_tabe(args):
     _mem_util.start_python_memory_tracking()
     _mem_util.print_memory_usage()
 
-    device = _acquire_device(configs)
-
     basemodels = []
     for (model_name, model_args) in configs.basemodel:
         bm_configs = configs
         if model_args is not None:
             bm_configs = copy.deepcopy(configs)
             bm_configs.__dict__.update(model_args.__dict__) # add/update with model-specific arguments
-        basemodels.append(_create_base_model(bm_configs, device, model_name))
+        basemodels.append(_create_base_model(bm_configs, model_name))
     
     combiner_configs = configs
     if configs.combiner is not None:
         combiner_configs = copy.deepcopy(configs)
         combiner_configs.__dict__.update(configs.combiner.__dict__) # add/update with model-specific arguments
-    combinerModel = CombinerModel(combiner_configs, device, basemodels)
 
-    if configs.adjuster is None:
-        adjusterModel = None
-    else:
+    adjuster_configs = None
+    if configs.adjuster is not None:
         adjuster_configs = copy.deepcopy(configs)
         adjuster_configs.__dict__.update(configs.adjuster.__dict__) # add/update with model-specific arguments
-        if configs.adj_model == 'moe':            
-            adjusterModel = TimeMoeAdjuster(adjuster_configs, device)
-        elif configs.adj == 'gpm':            
-            adjusterModel = GpmAdjuster(adjuster_configs)
-        else:
-            raise ValueError(f"Model {configs.adj_model} is not supported as an Adjuster model")
 
-    tabeModel = TabeModel(configs, device, combinerModel, adjusterModel)
-    return tabeModel, combinerModel, basemodels, result_dir
+    # Calculate length to warm-up ensemble models in 'test' period.
+    # This should be done after each model's configuration is set. 
+    warm_up_length = _calculate_warm_up_length(combiner_configs, adjuster_configs)
+
+    combiner_configs.warm_up_length = warm_up_length
+    combinerModel = CombinerModel(combiner_configs, basemodels)
+
+    if adjuster_configs is None:
+        adjusterModel = None
+    else:
+        adjuster_configs.warm_up_length = warm_up_length
+        assert configs.adj_model == 'moe', f"Model {configs.adj_model} is not supported as an Adjuster model"
+        # if configs.adj_model == 'moe': 
+        adjusterModel = TimeMoeAdjuster(adjuster_configs, combinerModel)
+
+    configs.warm_up_length = warm_up_length    
+    tabeModel = TabeModel(configs, combinerModel, adjusterModel)
+
+    return tabeModel, combinerModel, basemodels
     
 
 def destroy_tabe(tabeModel):
@@ -530,7 +457,7 @@ def destroy_tabe(tabeModel):
 
 
 def _run(args=None):
-    tabeModel, combinerModel, basemodels, result_dir = create_tabe(args)
+    tabeModel, combinerModel, basemodels = create_tabe(args)
 
     logger.info('Training Tabe model ======================\n')
     tabeModel.train()    
@@ -540,7 +467,7 @@ def _run(args=None):
 
     logger.info('Reporting ==================================\n')
 
-    _report_results(tabeModel.configs, result_dir, tabeModel, combinerModel, basemodels)
+    report_results(tabeModel, combinerModel, basemodels)
 
     destroy_tabe(tabeModel)
     logger.info('Bye ~~~~~~')

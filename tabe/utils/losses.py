@@ -16,10 +16,10 @@
 Loss functions for PyTorch.
 """
 
+import numpy as np
 import torch as t
 import torch.nn as nn
-import numpy as np
-import pdb
+
 
 
 def divide_no_nan(a, b):
@@ -87,3 +87,20 @@ class mase_loss(nn.Module):
         masep = t.mean(t.abs(insample[:, freq:] - insample[:, :-freq]), dim=1)
         masked_masep_inv = divide_no_nan(mask, masep[:, None])
         return t.mean(t.abs(target - forecast) * masked_masep_inv)
+
+#  -----------------------------------------------------
+
+def get_loss_func(loss:str):
+    loss = loss.upper()
+    if loss == 'MSE':
+        return nn.MSELoss()
+    elif loss == 'MAE':
+        return nn.L1Loss()
+    elif loss == 'MAPE':
+        return mape_loss
+    elif loss == 'SMAPE':
+        return smape_loss
+    elif loss == 'MASE':
+        return mase_loss
+    else:
+        assert False, 'Not suppprted loss : {loss}'

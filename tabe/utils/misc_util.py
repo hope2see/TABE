@@ -2,40 +2,8 @@
 import numpy as np
 import torch
 import time 
-from datetime import datetime
 from tabe.utils.logger import logger
-from tabe.utils.losses import mape_loss, smape_loss, mase_loss
-import torch.nn as nn
 
-
-_experiment_signature = None
-def set_experiment_sig(configs):
-    global _experiment_signature
-    _experiment_signature =  f"{configs.model_id}_sl{configs.seq_len}"
-    _experiment_signature += f"_ep{configs.train_epochs}_" 
-    _experiment_signature += datetime.now().strftime("%Y%m%d_%H%M%S")
-
-def experiment_sig():
-    assert _experiment_signature is not None
-    return _experiment_signature
-
-#  -----------------------------------------------------
-
-def get_loss_func(loss:str):
-    loss = loss.upper()
-    if loss == 'MSE':
-        return nn.MSELoss()
-    elif loss == 'MAE':
-        return nn.L1Loss()
-    elif loss == 'MAPE':
-        return mape_loss
-    elif loss == 'SMAPE':
-        return smape_loss
-    elif loss == 'MASE':
-        return mase_loss
-    else:
-        logger.error('Not suppprted loss : {loss}')
-        raise NotImplementedError
 
 #  -----------------------------------------------------
 

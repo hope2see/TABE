@@ -176,7 +176,7 @@ def _stock_data_gen(config, filepathname, feature_config):
 # So, we moved validation_period to the first part of dataset. 
 # [validateion_set (20%) | train_set (50%) | ensemble_train_set (20%) | test_set (10%)]
 #
-class Dataset_TABE_Base(Dataset):
+class Dataset_TABE(Dataset):
     def __init__(self, 
         config, 
         size,  # [seq_len, label_len, pred_len]
@@ -256,14 +256,13 @@ class Dataset_TABE_Base(Dataset):
         cols.remove(self.target)
         df_data = df_data[cols + [self.target]]
 
-        # Remove unused columns 
         if self.features == 'M' or self.features == 'MS':
+            # Remove unused columns 
             del df_data['Date']
         elif self.features == 'S':
             # remove all except target column
             df_data = df_data[[self.target]]
-
-        # normalize 
+        
         if self.scale:
             ref_data = df_data[ref_data_begin:ref_data_end]
             self.scaler.fit(ref_data.values)
@@ -273,6 +272,16 @@ class Dataset_TABE_Base(Dataset):
 
         self.data_x = data[data_begin:data_end]
         self.data_y = data[data_begin:data_end]
+
+        # save original labels (before transforming)
+        if self.flag in ['ensemble_train', 'test']:
+            assert self.features in ['MS', 'S'], "Only feature type 'MS' and 'S' are supported!"
+            assert self.config.label_len == 1, "Only label_len of 1 is  supported!"
+            labels = df_data[self.target].values[data_begin:data_end]
+            # remove the first element to align timestep (index) of labels with data_x. 
+            # now, len(lables) == len(self) - 1
+            self.labels = labels[-len(self)+1:] 
+
         # if self.set_type == 0 and self.args.augmentation_ratio > 0:
         #     self.data_x, self.data_y, augmentation_tags = run_augmentation_single(self.data_x, self.data_y, self.args)
 
@@ -329,12 +338,23 @@ class Dataset_TABE_Base(Dataset):
 
     def inverse_transform(self, data):
         if self.scale:
-            return self.scaler.inverse_transform(data)
+            assert data.ndim == 1 or data.ndim == 2
+            if data.ndim == 1:
+                data_2d = np.zeros((len(data), self.data_x.shape[1]))
+                data_2d[:, -1] = data
+            return self.scaler.inverse_transform(data_2d)[:,-1]
         else :
             return data
+        
+    def get_labels(self, original=True):
+        if original:
+            return self.labels
+        else:
+            # remove the first element to align timestep (index) of labels with data_x. 
+            return self.data_y[-len(self)+1:, -1]
 
 
-class Dataset_TABE_Live(Dataset_TABE_Base):
+class Dataset_TABE_Live(Dataset_TABE):
 
     def __init__(self, config, size, flag, timeenc, df_previous, feature_config=_default_feature_config):
         # assume that Live Dataset is used for ensemble_train or test 
@@ -385,7 +405,7 @@ class Dataset_TABE_Live(Dataset_TABE_Base):
         return self[-1] # return the latest data
 
 
-class Dataset_TABE_File(Dataset_TABE_Base):
+class Dataset_TABE_File(Dataset_TABE):
     def __init__(self, config, size, flag, timeenc, root_path=None, data_path=None):
         root_path = config.root_path if root_path is None else root_path
         data_path = config.data_path if data_path is None else data_path        

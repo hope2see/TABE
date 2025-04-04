@@ -27,8 +27,8 @@ from tabe.utils.logger import logger
 # Statistical models (ETS, and SARIMA) are available only for univariate forecasting,
 # So, they are fitted only using the target variable.
 class StatisticalModel(AbstractModel):
-    def __init__(self, configs, device, name):
-        super().__init__(configs, device, name) 
+    def __init__(self, configs, name):
+        super().__init__(configs, name) 
 
     def _fit(self, endog):
         raise NotImplementedError
@@ -47,20 +47,11 @@ class StatisticalModel(AbstractModel):
         endog = batch_x[0, :, -1].numpy()
         pred = self._fit(endog).forecast(steps=1)
         return pred[0]
-
-    # def proceed_onestep(self, batch_x, batch_y, batch_x_mark, batch_y_mark, training: bool = False):
-    #     assert batch_x.shape[0]==1 and batch_y.shape[0]==1
-    #     endog = batch_y[0, :self.configs.seq_len, -1] # shape=(B,S+1,F) B(Batch Size)=1, S(Sequence Length)+1, F(Feature Dimension)
-    #     endog = endog.numpy()
-    #     pred = self._fit(endog).forecast(steps=1)
-    #     truth = batch_y[0, -1, -1] 
-    #     loss = self.criterion(torch.tensor(pred), truth).item()
-    #     return pred[0], loss
     
 
 class EtsModel(StatisticalModel):
-    def __init__(self, configs, device=None, name="ETS"):
-        super().__init__(configs, device, name) 
+    def __init__(self, configs, name="ETS"):
+        super().__init__(configs, name) 
 
     def _fit(self, endog):
         # NOTE: Use auto-finding of the hyperparameters for ETS
@@ -68,8 +59,8 @@ class EtsModel(StatisticalModel):
 
 
 class SarimaModel(StatisticalModel):
-    def __init__(self, configs, device=None, name="SARIMA"):
-        super().__init__(configs, device, name) 
+    def __init__(self, configs, name="SARIMA"):
+        super().__init__(configs, name) 
 
     def _fit(self, endog):
         # NOTE: Use auto-finding of the hyperparameters for SARIMA
@@ -77,8 +68,8 @@ class SarimaModel(StatisticalModel):
 
 
 class AutoSarimaModel(StatisticalModel):
-    def __init__(self, configs, device=None, name="AutoSARIMA"):
-        super().__init__(configs, device, name) 
+    def __init__(self, configs, name="AutoSARIMA"):
+        super().__init__(configs, name) 
 
     def _fit(self, endog):
         # pmdarima.auto_arima() often fails when endog series contains outliers.
@@ -116,6 +107,6 @@ class AutoSarimaModel(StatisticalModel):
     def forecast(self, steps=1):
         pred = self.model.predict(n_periods=steps)
         if pred[0] == 0 and self.model.order == (0,0,0):
-            logger.info('AutoSarimaModel seems to have failed in fitting! (pred is 0.0)')
+            logger.debug('AutoSarimaModel seems to have failed in fitting! (pred is 0.0)')
             # self.model.summary()
         return pred

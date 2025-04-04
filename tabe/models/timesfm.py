@@ -19,9 +19,8 @@ import timesfm
 class TimesFM(AbstractModel):
     MAX_CONTEXT_LEN = 2048 # limitation of TimesFM 2.0
 
-    def __init__(self, configs, device=None, name='TimesFM'):
-        super().__init__(configs, device, name)
-        self.device = device
+    def __init__(self, configs, name='TimesFM'):
+        super().__init__(configs, name)
         self.checkpoint_path = 'google/timesfm-2.0-500m-pytorch'
         
         assert configs.seq_len % 32 == 0, 'seq_len must be a multiple of 32(input_patch_len)'

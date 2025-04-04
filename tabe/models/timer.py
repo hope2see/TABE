@@ -10,14 +10,13 @@ _mem_util = MemUtil(rss_mem=False, python_mem=False)
 class Timer(AbstractModel):
     MAX_CONTEXT_LEN = 4096 # limitation of TimeMoE architecture
 
-    def __init__(self, configs, device, name='Timer'):
-        super().__init__(configs, device, name)
-        self.device = device
+    def __init__(self, configs, name='Timer'):
+        super().__init__(configs, name)
         checkpoint_path = 'thuml/timer-base-84m'
             
         model = AutoModelForCausalLM.from_pretrained(
             checkpoint_path,
-            device_map=device,
+            device_map=configs.device,
             torch_dtype='auto',
             trust_remote_code=True,
         )
@@ -25,7 +24,6 @@ class Timer(AbstractModel):
         logger.info(f'>>> Model dtype: {model.dtype}; Attention:{model.config._attn_implementation}')
 
         self.model = model
-        self.device = device
         # self.model.eval()
 
 
@@ -47,7 +45,7 @@ class Timer(AbstractModel):
         # input_token_len of default (or pretrained) config of Timer model is set to be 96 !! 
         # Input length must be at least Timer's config.input_token_len
         outputs = self.model.generate(
-            inputs=batch_x.to(self.device).to(self.model.dtype),
+            inputs=batch_x.to(self.configs.device).to(self.model.dtype),
             max_new_tokens=1, # prediction_length
         )
 
